@@ -1,0 +1,5 @@
+build/
+Lib/Mobile.xcframework
+FreeTurn.xcodeproj
+core/
+.DS_Store

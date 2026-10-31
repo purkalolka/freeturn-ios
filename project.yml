@@ -1,0 +1,113 @@
+name: FreeTurn
+options:
+  bundleIdPrefix: com.purkalolka.freeturn
+  deploymentTarget:
+    iOS: "15.0"
+  createIntermediateGroups: true
+
+settings:
+  base:
+    MARKETING_VERSION: "1.0.0"
+    CURRENT_PROJECT_VERSION: "1"
+
+targets:
+  FreeTurn:
+    type: application
+    platform: iOS
+    sources:
+      - path: FreeTurn
+      - path: Shared
+      - path: Lib
+        buildPhase: none
+    dependencies:
+      - framework: Lib/Mobile.xcframework
+        embed: true
+      - target: FreeTurnTunnel
+        embed: true
+    info:
+      path: FreeTurn/Info.plist
+      properties:
+        ITSAppUsesNonExemptEncryption: false
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        LSRequiresIPhoneOS: true
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
+    entitlements:
+      path: FreeTurn/FreeTurn.entitlements
+      properties:
+        com.apple.developer.networking.networkextension:
+          - packet-tunnel-provider
+        com.apple.security.application-groups:
+          - group.com.purkalolka.freeturn
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.purkalolka.freeturn
+        PRODUCT_NAME: FreeTurn
+        INFOPLIST_KEY_CFBundleDisplayName: FreeTurn
+        SWIFT_VERSION: "5.0"
+        TARGETED_DEVICE_FAMILY: "1"
+        HEADER_SEARCH_PATHS:
+          - "$(SRCROOT)/Lib"
+        FRAMEWORK_SEARCH_PATHS:
+          - "$(SRCROOT)/Lib"
+        OTHER_LDFLAGS:
+          - "-framework"
+          - "CoreFoundation"
+          - "-framework"
+          - "Security"
+        CODE_SIGN_STYLE: Manual
+        CODE_SIGN_IDENTITY: ""
+        DEVELOPMENT_TEAM: ""
+        PROVISIONING_PROFILE_SPECIFIER: ""
+
+  FreeTurnTunnel:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: FreeTurnTunnel
+      - path: Shared
+      - path: Lib
+        buildPhase: none
+    dependencies:
+      - framework: Lib/Mobile.xcframework
+        embed: false
+    info:
+      path: FreeTurnTunnel/Info.plist
+      properties:
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        CFBundleDisplayName: FreeTurn Tunnel
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.networkextension.packet-tunnel
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).PacketTunnelProvider
+    entitlements:
+      path: FreeTurnTunnel/FreeTurnTunnel.entitlements
+      properties:
+        com.apple.developer.networking.networkextension:
+          - packet-tunnel-provider
+        com.apple.security.application-groups:
+          - group.com.purkalolka.freeturn
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.purkalolka.freeturn.tunnel
+        PRODUCT_NAME: FreeTurnTunnel
+        SWIFT_OBJC_BRIDGING_HEADER: FreeTurnTunnel/Tunnel-Bridging-Header.h
+        SWIFT_VERSION: "5.0"
+        TARGETED_DEVICE_FAMILY: "1"
+        HEADER_SEARCH_PATHS:
+          - "$(SRCROOT)/Lib"
+        FRAMEWORK_SEARCH_PATHS:
+          - "$(SRCROOT)/Lib"
+        OTHER_LDFLAGS:
+          - "-framework"
+          - "CoreFoundation"
+          - "-framework"
+          - "Security"
+        CODE_SIGN_STYLE: Manual
+        CODE_SIGN_IDENTITY: ""
+        DEVELOPMENT_TEAM: ""
+        PROVISIONING_PROFILE_SPECIFIER: ""
