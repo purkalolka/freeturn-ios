@@ -108,16 +108,20 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             SharedLog.write("[EXT] MobileStartTunnel returned OK")
 
             self.started = true
-            self.memTimer = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { _ in
-                SharedLog.write("[MEM] \(MobileMemStats())")
-            }
+            // GCD timer: this callback runs on a queue with no active run loop, so Timer would never fire.
+            let t = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .utility))
+            t.schedule(deadline: .now() + 2, repeating: 10)
+            t.setEventHandler { SharedLog.write("[MEM] \(MobileMemStats())") }
+            t.resume()
+            self.memTimer = t
             completionHandler(nil)
         }
     }
 
     override func stopTunnel(with reason: NEProviderStopReason, completionHandler: @escaping () -> Void) {
         SharedLog.write("[EXT] stopTunnel reason=\(reason.rawValue)")
-        memTimer?.invalidate()
+        memTimer?.cancel()
+        memTimer = nil
         if started {
             MobileStop()
             started = false
@@ -126,7 +130,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     }
 
     private var eventSink: TunnelEventSink?
-    private var memTimer: Timer?
+    private var memTimer: DispatchSourceTimer?
 
     override func handleAppMessage(_ messageData: Data, completionHandler: ((Data?) -> Void)?) {
         let data = try? JSONSerialization.data(withJSONObject: SharedLog.snapshot())
