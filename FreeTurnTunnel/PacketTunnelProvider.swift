@@ -62,12 +62,9 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         settings.ipv4Settings = ipv4
         settings.mtu = NSNumber(value: params.mtu > 0 ? params.mtu : mtu)
 
-        // The Go core only speaks IPv4 - without this, iOS leaves IPv6 on the device's
-        // real interface, and IPv6-preferring destinations (Happy Eyeballs, e.g. Google)
-        // bypass the tunnel entirely instead of failing over to the tunneled IPv4 path.
-        let ipv6 = NEIPv6Settings(addresses: ["fd00:0:0:0:0:0:0:1"], networkPrefixLengths: [128])
-        ipv6.includedRoutes = [NEIPv6Route.default()]
-        settings.ipv6Settings = ipv6
+        // IPv6 is intentionally left off the tunnel (same as the Android client): the Go core
+        // only speaks IPv4, so routing IPv6 into it black-holes traffic and makes apps wait
+        // for a timeout before falling back to IPv4 (slow TikTok and similar).
 
         var dnsList = params.dns.split(separator: ",").map(String.init).filter { !$0.isEmpty }
         if dnsList.isEmpty {
