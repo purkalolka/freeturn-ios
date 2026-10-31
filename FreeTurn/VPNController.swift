@@ -12,7 +12,8 @@ final class VPNController: ObservableObject {
     @Published var remoteCaptcha: String?
 
     private var manager: NETunnelProviderManager?
-    private let extensionBundleId = "com.purkalolka.freeturn.tunnel"
+    /// Derived from the real bundle id so it survives re-signing with a different one.
+    private let extensionBundleId = (Bundle.main.bundleIdentifier ?? "com.purkalolka.freeturn") + ".tunnel"
 
     init() {
         NotificationCenter.default.addObserver(
