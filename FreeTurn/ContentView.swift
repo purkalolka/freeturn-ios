@@ -126,6 +126,11 @@ struct ContentView: View {
                 .frame(width: 12, height: 12)
             Text(vpn.status).font(.headline)
             Spacer()
+            if vpn.active && vpn.totalStreams > 0 {
+                Text("\(vpn.streams)/\(vpn.totalStreams)")
+                    .font(.system(.subheadline, design: .monospaced))
+                    .foregroundColor(vpn.streams == vpn.totalStreams ? .secondary : .orange)
+            }
         }
     }
 }

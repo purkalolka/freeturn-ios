@@ -133,7 +133,12 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     private var memTimer: DispatchSourceTimer?
 
     override func handleAppMessage(_ messageData: Data, completionHandler: ((Data?) -> Void)?) {
-        let data = try? JSONSerialization.data(withJSONObject: SharedLog.snapshot())
+        var info = SharedLog.snapshot()
+        if let st = MobileGetState() {
+            info["streams"] = String(st.streams)
+            info["total"] = String(st.total)
+        }
+        let data = try? JSONSerialization.data(withJSONObject: info)
         completionHandler?(data)
     }
 

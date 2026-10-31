@@ -10,6 +10,8 @@ final class VPNController: ObservableObject {
     @Published var lastError: String?
     @Published var remoteLog = ""
     @Published var remoteCaptcha: String?
+    @Published var streams = 0
+    @Published var totalStreams = 0
 
     private var manager: NETunnelProviderManager?
     /// Derived from the real bundle id so it survives re-signing with a different one.
@@ -84,6 +86,8 @@ final class VPNController: ObservableObject {
                 self?.remoteLog = obj["log"] ?? ""
                 let c = obj["captcha"] ?? ""
                 self?.remoteCaptcha = c.isEmpty ? nil : c
+                self?.streams = Int(obj["streams"] ?? "") ?? 0
+                self?.totalStreams = Int(obj["total"] ?? "") ?? 0
             }
         }
     }
@@ -103,6 +107,7 @@ final class VPNController: ObservableObject {
         case .reasserting:   status = "Reasserting…";  active = true
         default:             status = "Disconnected";  active = false
         }
+        if conn.status == .disconnected { streams = 0; totalStreams = 0 }
         if conn.status == .disconnected, #available(iOS 16.0, *) {
             conn.fetchLastDisconnectError { [weak self] err in
                 guard let err = err else { return }
