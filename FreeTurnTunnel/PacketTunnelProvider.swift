@@ -1,6 +1,7 @@
 import NetworkExtension
 import Darwin
 import Mobile
+import UserNotifications
 
 /// System VPN entry point. The Go core (Mobile.xcframework) runs WireGuard/AmneziaWG
 /// entirely in-process, talking to the TURN relay through an in-memory pipe — there is
@@ -198,5 +199,19 @@ private final class TunnelEventSink: NSObject, MobileEventSinkProtocol {
     func onCaptcha(_ url: String?) {
         SharedLog.write("[CAPTCHA] \(url ?? "(cleared)")")
         SharedLog.captchaURL = url
+        guard let url = url, !url.isEmpty, url != lastNotified else {
+            if url == nil || url?.isEmpty == true { lastNotified = nil }
+            return
+        }
+        lastNotified = url
+        let content = UNMutableNotificationContent()
+        content.title = "VK captcha required"
+        content.body = "Tap to solve it in the browser"
+        content.sound = .default
+        content.userInfo = ["captchaURL": url]
+        if #available(iOS 15.0, *) { content.interruptionLevel = .timeSensitive }
+        UNUserNotificationCenter.current().add(
+            UNNotificationRequest(identifier: "captcha", content: content, trigger: nil))
     }
+    private var lastNotified: String?
 }
