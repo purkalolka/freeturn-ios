@@ -48,6 +48,7 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.purkalolka.freeturn
         PRODUCT_NAME: FreeTurn
         INFOPLIST_KEY_CFBundleDisplayName: FreeTurn
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         SWIFT_VERSION: "5.0"
         TARGETED_DEVICE_FAMILY: "1"
         HEADER_SEARCH_PATHS:
