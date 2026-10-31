@@ -63,15 +63,17 @@ struct ContentView: View {
     }
 
     private func refreshLog() {
-        logText = SharedLog.read()
-        captchaURL = SharedLog.captchaURL
+        vpn.fetchLog()
+        let fileLog = SharedLog.read()
+        logText = vpn.remoteLog.isEmpty ? fileLog : vpn.remoteLog
+        captchaURL = vpn.remoteCaptcha ?? SharedLog.captchaURL
     }
 
     private var logView: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
                 Spacer()
-                Button("Clear") { SharedLog.clear(); refreshLog() }.font(.caption)
+                Button("Clear") { SharedLog.clear(); vpn.remoteLog = ""; refreshLog() }.font(.caption)
                 Button("Refresh") { refreshLog() }.font(.caption)
             }
             ScrollView {

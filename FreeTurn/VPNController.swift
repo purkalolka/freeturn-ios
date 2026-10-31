@@ -8,6 +8,8 @@ final class VPNController: ObservableObject {
     @Published var status: String = "Disconnected"
     @Published var active = false
     @Published var lastError: String?
+    @Published var remoteLog = ""
+    @Published var remoteCaptcha: String?
 
     private var manager: NETunnelProviderManager?
     private let extensionBundleId = "com.purkalolka.freeturn.tunnel"
@@ -70,6 +72,21 @@ final class VPNController: ObservableObject {
         }
     }
 
+    /// Pulls the extension's in-memory log over IPC (works without a shared App Group).
+    func fetchLog() {
+        guard let session = manager?.connection as? NETunnelProviderSession,
+              session.status != .disconnected, session.status != .invalid else { return }
+        try? session.sendProviderMessage(Data()) { [weak self] reply in
+            guard let reply = reply,
+                  let obj = try? JSONSerialization.jsonObject(with: reply) as? [String: String] else { return }
+            Task { @MainActor in
+                self?.remoteLog = obj["log"] ?? ""
+                let c = obj["captcha"] ?? ""
+                self?.remoteCaptcha = c.isEmpty ? nil : c
+            }
+        }
+    }
+
     func stop() {
         manager?.connection.stopVPNTunnel()
     }
@@ -84,6 +101,12 @@ final class VPNController: ObservableObject {
         case .disconnecting: status = "Disconnecting…"; active = true
         case .reasserting:   status = "Reasserting…";  active = true
         default:             status = "Disconnected";  active = false
+        }
+        if conn.status == .disconnected, #available(iOS 16.0, *) {
+            conn.fetchLastDisconnectError { [weak self] err in
+                guard let err = err else { return }
+                Task { @MainActor in self?.lastError = err.localizedDescription }
+            }
         }
     }
 }

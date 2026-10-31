@@ -125,6 +125,11 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
     private var eventSink: TunnelEventSink?
 
+    override func handleAppMessage(_ messageData: Data, completionHandler: ((Data?) -> Void)?) {
+        let data = try? JSONSerialization.data(withJSONObject: SharedLog.snapshot())
+        completionHandler?(data)
+    }
+
     /// Extracts the raw file descriptor backing this extension's utun interface.
     /// NEPacketTunnelFlow does not expose it publicly; every userspace-WireGuard iOS
     /// app (WireGuard, AmneziaWG) relies on this same scan — the interface is a
