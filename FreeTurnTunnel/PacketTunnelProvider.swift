@@ -12,6 +12,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     override func startTunnel(options: [String: NSObject]?, completionHandler: @escaping (Error?) -> Void) {
         SharedLog.clear()
         SharedLog.captchaURL = nil
+        MobileTuneForExtension()
         SharedLog.write("[EXT] startTunnel called")
         let conf = (protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration ?? [:]
         guard let configJSON = conf["configJSON"] as? String,
@@ -107,12 +108,16 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             SharedLog.write("[EXT] MobileStartTunnel returned OK")
 
             self.started = true
+            self.memTimer = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { _ in
+                SharedLog.write("[MEM] \(MobileMemStats())")
+            }
             completionHandler(nil)
         }
     }
 
     override func stopTunnel(with reason: NEProviderStopReason, completionHandler: @escaping () -> Void) {
         SharedLog.write("[EXT] stopTunnel reason=\(reason.rawValue)")
+        memTimer?.invalidate()
         if started {
             MobileStop()
             started = false
@@ -121,6 +126,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     }
 
     private var eventSink: TunnelEventSink?
+    private var memTimer: Timer?
 
     override func handleAppMessage(_ messageData: Data, completionHandler: ((Data?) -> Void)?) {
         let data = try? JSONSerialization.data(withJSONObject: SharedLog.snapshot())
