@@ -55,11 +55,8 @@ struct FreeTurnControl: ControlWidget {
     var body: some ControlWidgetConfiguration {
         StaticControlConfiguration(kind: controlKind, provider: VPNValueProvider()) { isOn in
             ControlWidgetToggle("FreeTurn", isOn: isOn, action: ToggleVPNIntent()) { on in
-                if UIImage(named: "FreeTurnLogo") != nil {
-                    Label(on ? "On" : "Off", image: "FreeTurnLogo")
-                } else {
-                    Label(on ? "On" : "Off", systemImage: "shield.fill")
-                }
+                // Control Center only renders SF Symbols / custom symbol templates, not plain images.
+                Label(on ? "On" : "Off", systemImage: on ? "diamond.inset.filled" : "diamond")
             }
         }
         .displayName("FreeTurn VPN")
