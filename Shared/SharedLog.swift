@@ -4,12 +4,30 @@ import Foundation
 /// extension is a separate process from the main app and Mobile's own
 /// DumpLogs() ring buffer lives in whichever process calls it.
 enum SharedLog {
-    /// Derived from the real bundle id so it survives re-signing with a different bundle id.
+    /// App Group actually granted by the provisioning profile embedded by the signer, so it
+    /// survives re-signing under any bundle id. Falls back to "group.<bundle id>".
     static let groupID: String = {
         var id = Bundle.main.bundleIdentifier ?? "com.purkalolka.freeturn"
         if id.hasSuffix(".tunnel") { id.removeLast(".tunnel".count) }
-        return "group." + id
+        if id.hasSuffix(".control") { id.removeLast(".control".count) }
+        let derived = "group." + id
+        let groups = profileAppGroups()
+        if groups.contains(derived) { return derived }
+        return groups.first ?? derived
     }()
+
+    private static func profileAppGroups() -> [String] {
+        guard let path = Bundle.main.path(forResource: "embedded", ofType: "mobileprovision"),
+              let raw = try? Data(contentsOf: URL(fileURLWithPath: path)),
+              let start = raw.range(of: Data("<?xml".utf8)),
+              let end = raw.range(of: Data("</plist>".utf8)),
+              start.lowerBound < end.upperBound,
+              let plist = try? PropertyListSerialization.propertyList(
+                from: raw.subdata(in: start.lowerBound..<end.upperBound), format: nil) as? [String: Any],
+              let ents = plist["Entitlements"] as? [String: Any],
+              let groups = ents["com.apple.security.application-groups"] as? [String] else { return [] }
+        return groups
+    }
 
     /// In-memory copy, served to the app over sendProviderMessage so logs work even
     /// when the App Group container is unavailable.
