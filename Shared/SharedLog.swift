@@ -16,6 +16,18 @@ enum SharedLog {
         return groups.first ?? derived
     }()
 
+    /// Human-readable signing/App Group state, shown in the app when the log is empty.
+    static var diagnostics: String {
+        let hasProfile = Bundle.main.path(forResource: "embedded", ofType: "mobileprovision") != nil
+        let container = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: groupID)
+        return """
+        bundle: \(Bundle.main.bundleIdentifier ?? "?")
+        app group: \(groupID)
+        profile groups: \(profileAppGroups().isEmpty ? "none (profile \(hasProfile ? "found" : "missing"))" : profileAppGroups().joined(separator: ", "))
+        group container: \(container == nil ? "UNAVAILABLE" : "ok")
+        """
+    }
+
     private static func profileAppGroups() -> [String] {
         guard let path = Bundle.main.path(forResource: "embedded", ofType: "mobileprovision"),
               let raw = try? Data(contentsOf: URL(fileURLWithPath: path)),

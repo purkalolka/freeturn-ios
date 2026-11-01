@@ -93,6 +93,16 @@ final class VPNController: ObservableObject {
         }
     }
 
+    var diagnostics: String {
+        let raw: String
+        if let c = manager?.connection {
+            raw = ["invalid", "disconnected", "connecting", "connected", "reasserting", "disconnecting"][min(max(c.status.rawValue, 0), 5)]
+        } else {
+            raw = "no VPN configuration saved"
+        }
+        return SharedLog.diagnostics + "\nextension: \(extensionBundleId)\nvpn status: \(raw)\nlast error: \(lastError ?? "none")"
+    }
+
     func stop() {
         manager?.connection.stopVPNTunnel()
     }

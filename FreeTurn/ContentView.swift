@@ -77,7 +77,7 @@ struct ContentView: View {
                 Button("Refresh") { refreshLog() }.font(.caption)
             }
             ScrollView {
-                Text(logText.isEmpty ? "—" : logText)
+                Text(logText.isEmpty ? "No log yet.\n\n" + vpn.diagnostics : logText)
                     .font(.system(.caption2, design: .monospaced))
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .textSelection(.enabled)
