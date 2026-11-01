@@ -12,6 +12,7 @@ final class VPNController: ObservableObject {
     @Published var remoteLog = ""
     @Published var remoteCaptcha: String?
     @Published var streams = 0
+    @Published var ipcStatus = "not queried yet"
     @Published var totalStreams = 0
 
     private var manager: NETunnelProviderManager?
@@ -78,18 +79,32 @@ final class VPNController: ObservableObject {
 
     /// Pulls the extension's in-memory log over IPC (works without a shared App Group).
     func fetchLog() {
-        guard let session = manager?.connection as? NETunnelProviderSession,
-              session.status != .disconnected, session.status != .invalid else { return }
-        try? session.sendProviderMessage(Data()) { [weak self] reply in
-            guard let reply = reply,
-                  let obj = try? JSONSerialization.jsonObject(with: reply) as? [String: String] else { return }
-            Task { @MainActor in
-                self?.remoteLog = obj["log"] ?? ""
-                let c = obj["captcha"] ?? ""
-                self?.remoteCaptcha = c.isEmpty ? nil : c
-                self?.streams = Int(obj["streams"] ?? "") ?? 0
-                self?.totalStreams = Int(obj["total"] ?? "") ?? 0
+        guard let session = manager?.connection as? NETunnelProviderSession else {
+            ipcStatus = "no tunnel session"
+            return
+        }
+        guard session.status != .disconnected, session.status != .invalid else {
+            ipcStatus = "tunnel not running"
+            return
+        }
+        do {
+            try session.sendProviderMessage(Data([1])) { [weak self] reply in
+                Task { @MainActor in
+                    guard let reply = reply else { self?.ipcStatus = "extension replied with nothing"; return }
+                    guard let obj = try? JSONSerialization.jsonObject(with: reply) as? [String: String] else {
+                        self?.ipcStatus = "unreadable reply (\(reply.count) bytes)"
+                        return
+                    }
+                    self?.remoteLog = obj["log"] ?? ""
+                    let c = obj["captcha"] ?? ""
+                    self?.remoteCaptcha = c.isEmpty ? nil : c
+                    self?.streams = Int(obj["streams"] ?? "") ?? 0
+                    self?.totalStreams = Int(obj["total"] ?? "") ?? 0
+                    self?.ipcStatus = "ok, extension log \(self?.remoteLog.count ?? 0) chars, streams \(self?.streams ?? 0)/\(self?.totalStreams ?? 0)"
+                }
             }
+        } catch {
+            ipcStatus = "send failed: \(error.localizedDescription)"
         }
     }
 
@@ -100,7 +115,7 @@ final class VPNController: ObservableObject {
         } else {
             raw = "no VPN configuration saved"
         }
-        return SharedLog.diagnostics + "\nextension: \(extensionBundleId)\nvpn status: \(raw)\nlast error: \(lastError ?? "none")"
+        return SharedLog.diagnostics + "\nextension: \(extensionBundleId)\nvpn status: \(raw)\nextension link: \(ipcStatus)\nlast error: \(lastError ?? "none")"
     }
 
     func stop() {
