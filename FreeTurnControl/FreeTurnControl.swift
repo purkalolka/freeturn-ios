@@ -55,7 +55,11 @@ struct FreeTurnControl: ControlWidget {
     var body: some ControlWidgetConfiguration {
         StaticControlConfiguration(kind: controlKind, provider: VPNValueProvider()) { isOn in
             ControlWidgetToggle("FreeTurn", isOn: isOn, action: ToggleVPNIntent()) { on in
-                Label(on ? "On" : "Off", image: "FreeTurnLogo")
+                if UIImage(named: "FreeTurnLogo") != nil {
+                    Label(on ? "On" : "Off", image: "FreeTurnLogo")
+                } else {
+                    Label(on ? "On" : "Off", systemImage: "shield.fill")
+                }
             }
         }
         .displayName("FreeTurn VPN")
