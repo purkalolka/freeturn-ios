@@ -2,6 +2,7 @@ import NetworkExtension
 import Darwin
 import Mobile
 import UserNotifications
+import Network
 
 /// System VPN entry point. The Go core (Mobile.xcframework) runs WireGuard/AmneziaWG
 /// entirely in-process, talking to the TURN relay through an in-memory pipe — there is
@@ -110,11 +111,15 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
             self.started = true
             // GCD timer: this callback runs on a queue with no active run loop, so Timer would never fire.
-            let t = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .utility))
+            let t = DispatchSource.makeTimerSource(queue: self.workQueue)
             t.schedule(deadline: .now() + 2, repeating: 10)
-            t.setEventHandler { SharedLog.write("[MEM] \(MobileMemStats())") }
+            t.setEventHandler { [weak self] in
+                SharedLog.write("[MEM] \(MobileMemStats())")
+                self?.watchStreams()
+            }
             t.resume()
             self.memTimer = t
+            self.startPathMonitor()
             completionHandler(nil)
         }
     }
@@ -123,6 +128,8 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         SharedLog.write("[EXT] stopTunnel reason=\(reason.rawValue)")
         memTimer?.cancel()
         memTimer = nil
+        pathMonitor?.cancel()
+        pathMonitor = nil
         if started {
             MobileStop()
             started = false
@@ -132,6 +139,60 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
     private var eventSink: TunnelEventSink?
     private var memTimer: DispatchSourceTimer?
+    private var pathMonitor: NWPathMonitor?
+    private let workQueue = DispatchQueue(label: "freeturn.work")
+    private var lastPathKey: String?
+    private var degradedSince: Date?
+    private var lastReconnect = Date.distantPast
+
+    override func wake() {
+        SharedLog.write("[EXT] wake - refreshing TURN allocations")
+        reconnect(reason: "wake")
+    }
+
+    /// Mirrors the Android client's NetworkHandoverMonitor: after Wi-Fi/cellular switches
+    /// the old TURN sockets are dead, but the Go core cannot see the network change itself.
+    private func startPathMonitor() {
+        // .other excludes our own utun interface.
+        let m = NWPathMonitor(prohibitedInterfaceTypes: [.other])
+        m.pathUpdateHandler = { [weak self] path in
+            guard let self = self else { return }
+            let key = path.status == .satisfied
+                ? path.availableInterfaces.map { $0.name }.sorted().joined(separator: ",")
+                : "none"
+            defer { self.lastPathKey = key }
+            guard let prev = self.lastPathKey, prev != key, key != "none" else { return }
+            SharedLog.write("[EXT] network changed \(prev) -> \(key)")
+            self.reconnect(reason: "network change")
+        }
+        m.start(queue: workQueue)
+        pathMonitor = m
+    }
+
+    /// Streams that stay below the target for a while are not coming back by themselves.
+    private func watchStreams() {
+        guard let st = MobileGetState(), st.total > 0, st.state == "connected" || st.state == "connecting" else {
+            degradedSince = nil
+            return
+        }
+        if st.streams >= st.total { degradedSince = nil; return }
+        let since = degradedSince ?? Date()
+        degradedSince = since
+        if Date().timeIntervalSince(since) > 45 {
+            degradedSince = nil
+            SharedLog.write("[EXT] streams \(st.streams)/\(st.total) for 45s - reconnecting")
+            reconnect(reason: "watchdog")
+        }
+    }
+
+    private func reconnect(reason: String) {
+        workQueue.async {
+            guard self.started, Date().timeIntervalSince(self.lastReconnect) > 15 else { return }
+            self.lastReconnect = Date()
+            SharedLog.write("[EXT] reconnect (\(reason))")
+            if reason == "wake" { MobileWake() } else { MobileReconnect() }
+        }
+    }
 
     override func handleAppMessage(_ messageData: Data, completionHandler: ((Data?) -> Void)?) {
         var info = SharedLog.snapshot()
