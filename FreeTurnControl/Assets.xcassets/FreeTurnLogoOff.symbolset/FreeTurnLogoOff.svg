@@ -11,22 +11,56 @@ PUBLIC "-//W3C//DTD SVG 1.1//EN"
  <g id="Guides">
   <line id="Baseline-S" style="fill:none;stroke:#27AAE1;opacity:1;stroke-width:0.5;" x1="263" x2="3036" y1="696" y2="696"/>
   <line id="Capline-S" style="fill:none;stroke:#27AAE1;opacity:1;stroke-width:0.5;" x1="263" x2="3036" y1="625.541" y2="625.541"/>
-  <line id="left-margin-Ultralight-S" style="fill:none;stroke:#00AEEF;stroke-width:0.5;opacity:1.0;" x1="598" x2="598" y1="600.0" y2="720.0"/>
-  <line id="right-margin-Ultralight-S" style="fill:none;stroke:#00AEEF;stroke-width:0.5;opacity:1.0;" x1="702" x2="702" y1="600.0" y2="720.0"/>
-  <line id="left-margin-Regular-S" style="fill:none;stroke:#00AEEF;stroke-width:0.5;opacity:1.0;" x1="1396" x2="1396" y1="600.0" y2="720.0"/>
-  <line id="right-margin-Regular-S" style="fill:none;stroke:#00AEEF;stroke-width:0.5;opacity:1.0;" x1="1504" x2="1504" y1="600.0" y2="720.0"/>
-  <line id="left-margin-Black-S" style="fill:none;stroke:#00AEEF;stroke-width:0.5;opacity:1.0;" x1="2192" x2="2192" y1="600.0" y2="720.0"/>
-  <line id="right-margin-Black-S" style="fill:none;stroke:#00AEEF;stroke-width:0.5;opacity:1.0;" x1="2308" x2="2308" y1="600.0" y2="720.0"/>
+  <line id="left-margin-Ultralight-S" style="fill:none;stroke:#00AEEF;stroke-width:0.5;opacity:1.0;" x1="598" x2="598" y1="600" y2="720"/>
+  <line id="right-margin-Ultralight-S" style="fill:none;stroke:#00AEEF;stroke-width:0.5;opacity:1.0;" x1="702" x2="702" y1="600" y2="720"/>
+  <line id="left-margin-Regular-S" style="fill:none;stroke:#00AEEF;stroke-width:0.5;opacity:1.0;" x1="1396" x2="1396" y1="600" y2="720"/>
+  <line id="right-margin-Regular-S" style="fill:none;stroke:#00AEEF;stroke-width:0.5;opacity:1.0;" x1="1504" x2="1504" y1="600" y2="720"/>
+  <line id="left-margin-Black-S" style="fill:none;stroke:#00AEEF;stroke-width:0.5;opacity:1.0;" x1="2192" x2="2192" y1="600" y2="720"/>
+  <line id="right-margin-Black-S" style="fill:none;stroke:#00AEEF;stroke-width:0.5;opacity:1.0;" x1="2308" x2="2308" y1="600" y2="720"/>
+  <line id="Baseline-M" style="fill:none;stroke:#27AAE1;opacity:1;stroke-width:0.5;" x1="263" x2="3036" y1="1126" y2="1126"/>
+  <line id="Capline-M" style="fill:none;stroke:#27AAE1;opacity:1;stroke-width:0.5;" x1="263" x2="3036" y1="1055.54" y2="1055.54"/>
+  <line id="left-margin-Ultralight-M" style="fill:none;stroke:#00AEEF;stroke-width:0.5;opacity:1.0;" x1="598" x2="598" y1="1030" y2="1150"/>
+  <line id="right-margin-Ultralight-M" style="fill:none;stroke:#00AEEF;stroke-width:0.5;opacity:1.0;" x1="702" x2="702" y1="1030" y2="1150"/>
+  <line id="left-margin-Regular-M" style="fill:none;stroke:#00AEEF;stroke-width:0.5;opacity:1.0;" x1="1396" x2="1396" y1="1030" y2="1150"/>
+  <line id="right-margin-Regular-M" style="fill:none;stroke:#00AEEF;stroke-width:0.5;opacity:1.0;" x1="1504" x2="1504" y1="1030" y2="1150"/>
+  <line id="left-margin-Black-M" style="fill:none;stroke:#00AEEF;stroke-width:0.5;opacity:1.0;" x1="2192" x2="2192" y1="1030" y2="1150"/>
+  <line id="right-margin-Black-M" style="fill:none;stroke:#00AEEF;stroke-width:0.5;opacity:1.0;" x1="2308" x2="2308" y1="1030" y2="1150"/>
+  <line id="Baseline-L" style="fill:none;stroke:#27AAE1;opacity:1;stroke-width:0.5;" x1="263" x2="3036" y1="1556" y2="1556"/>
+  <line id="Capline-L" style="fill:none;stroke:#27AAE1;opacity:1;stroke-width:0.5;" x1="263" x2="3036" y1="1485.54" y2="1485.54"/>
+  <line id="left-margin-Ultralight-L" style="fill:none;stroke:#00AEEF;stroke-width:0.5;opacity:1.0;" x1="598" x2="598" y1="1460" y2="1580"/>
+  <line id="right-margin-Ultralight-L" style="fill:none;stroke:#00AEEF;stroke-width:0.5;opacity:1.0;" x1="702" x2="702" y1="1460" y2="1580"/>
+  <line id="left-margin-Regular-L" style="fill:none;stroke:#00AEEF;stroke-width:0.5;opacity:1.0;" x1="1396" x2="1396" y1="1460" y2="1580"/>
+  <line id="right-margin-Regular-L" style="fill:none;stroke:#00AEEF;stroke-width:0.5;opacity:1.0;" x1="1504" x2="1504" y1="1460" y2="1580"/>
+  <line id="left-margin-Black-L" style="fill:none;stroke:#00AEEF;stroke-width:0.5;opacity:1.0;" x1="2192" x2="2192" y1="1460" y2="1580"/>
+  <line id="right-margin-Black-L" style="fill:none;stroke:#00AEEF;stroke-width:0.5;opacity:1.0;" x1="2308" x2="2308" y1="1460" y2="1580"/>
  </g>
  <g id="Symbols">
   <g id="Ultralight-S" transform="matrix(1 0 0 1 650 696)">
-   <path d="M 0 -85 L 50 -35 L 0 15 L -50 -35 Z M 0 -80.76 L -45.76 -35 L 0 10.76 L 45.76 -35 Z M 0 -35.01 L 0.01 -35 L 0 -34.99 L -0.01 -35 Z"/>
+   <path d="M 0 -85 L 50 -35 L 0 15 L -50 -35 Z M 0 -80.76 L -45.76 -35 L 0 10.76 L 45.76 -35 Z"/>
   </g>
   <g id="Regular-S" transform="matrix(1 0 0 1 1450 696)">
-   <path d="M 0 -87 L 52 -35 L 0 17 L -52 -35 Z M 0 -78.51 L -43.51 -35 L 0 8.51 L 43.51 -35 Z M 0 -35.01 L 0.01 -35 L 0 -34.99 L -0.01 -35 Z"/>
+   <path d="M 0 -87 L 52 -35 L 0 17 L -52 -35 Z M 0 -78.51 L -43.51 -35 L 0 8.51 L 43.51 -35 Z"/>
   </g>
   <g id="Black-S" transform="matrix(1 0 0 1 2250 696)">
-   <path d="M 0 -91 L 56 -35 L 0 21 L -56 -35 Z M 0 -75.44 L -40.44 -35 L 0 5.44 L 40.44 -35 Z M 0 -35.01 L 0.01 -35 L 0 -34.99 L -0.01 -35 Z"/>
+   <path d="M 0 -91 L 56 -35 L 0 21 L -56 -35 Z M 0 -75.44 L -40.44 -35 L 0 5.44 L 40.44 -35 Z"/>
+  </g>
+  <g id="Ultralight-M" transform="matrix(1 0 0 1 650 1126)">
+   <path d="M 0 -85 L 50 -35 L 0 15 L -50 -35 Z M 0 -80.76 L -45.76 -35 L 0 10.76 L 45.76 -35 Z"/>
+  </g>
+  <g id="Regular-M" transform="matrix(1 0 0 1 1450 1126)">
+   <path d="M 0 -87 L 52 -35 L 0 17 L -52 -35 Z M 0 -78.51 L -43.51 -35 L 0 8.51 L 43.51 -35 Z"/>
+  </g>
+  <g id="Black-M" transform="matrix(1 0 0 1 2250 1126)">
+   <path d="M 0 -91 L 56 -35 L 0 21 L -56 -35 Z M 0 -75.44 L -40.44 -35 L 0 5.44 L 40.44 -35 Z"/>
+  </g>
+  <g id="Ultralight-L" transform="matrix(1 0 0 1 650 1556)">
+   <path d="M 0 -85 L 50 -35 L 0 15 L -50 -35 Z M 0 -80.76 L -45.76 -35 L 0 10.76 L 45.76 -35 Z"/>
+  </g>
+  <g id="Regular-L" transform="matrix(1 0 0 1 1450 1556)">
+   <path d="M 0 -87 L 52 -35 L 0 17 L -52 -35 Z M 0 -78.51 L -43.51 -35 L 0 8.51 L 43.51 -35 Z"/>
+  </g>
+  <g id="Black-L" transform="matrix(1 0 0 1 2250 1556)">
+   <path d="M 0 -91 L 56 -35 L 0 21 L -56 -35 Z M 0 -75.44 L -40.44 -35 L 0 5.44 L 40.44 -35 Z"/>
   </g>
  </g>
 </svg>
