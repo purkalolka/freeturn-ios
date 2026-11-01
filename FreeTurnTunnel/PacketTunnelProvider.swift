@@ -211,9 +211,6 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         }
         completionHandler?(data)
     }
-        let data = try? JSONSerialization.data(withJSONObject: info)
-        completionHandler?(data)
-    }
 
     /// Extracts the raw file descriptor backing this extension's utun interface.
     /// NEPacketTunnelFlow does not expose it publicly; every userspace-WireGuard iOS
