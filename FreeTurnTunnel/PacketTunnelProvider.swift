@@ -3,6 +3,7 @@ import Darwin
 import Mobile
 import UserNotifications
 import Network
+import WidgetKit
 
 /// System VPN entry point. The Go core (Mobile.xcframework) runs WireGuard/AmneziaWG
 /// entirely in-process, talking to the TURN relay through an in-memory pipe — there is
@@ -110,6 +111,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             SharedLog.write("[EXT] MobileStartTunnel returned OK")
 
             self.started = true
+            if #available(iOS 18.0, *) { ControlCenter.shared.reloadControls(ofKind: "FreeTurnToggle") }
             // GCD timer: this callback runs on a queue with no active run loop, so Timer would never fire.
             let t = DispatchSource.makeTimerSource(queue: self.workQueue)
             t.schedule(deadline: .now() + 2, repeating: 10)

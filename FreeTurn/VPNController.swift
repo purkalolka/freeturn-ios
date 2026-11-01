@@ -2,6 +2,7 @@ import Foundation
 import NetworkExtension
 import Combine
 import Mobile
+import WidgetKit
 
 @MainActor
 final class VPNController: ObservableObject {
@@ -99,6 +100,9 @@ final class VPNController: ObservableObject {
     @objc private func statusChanged() { refreshStatus() }
 
     private func refreshStatus() {
+        defer {
+            if #available(iOS 18.0, *) { ControlCenter.shared.reloadControls(ofKind: "FreeTurnToggle") }
+        }
         guard let conn = manager?.connection else { active = false; status = "Disconnected"; return }
         switch conn.status {
         case .connected:     status = "Connected";     active = true

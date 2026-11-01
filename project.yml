@@ -24,6 +24,8 @@ targets:
         embed: true
       - target: FreeTurnTunnel
         embed: true
+      - target: FreeTurnControl
+        embed: true
     info:
       path: FreeTurn/Info.plist
       properties:
@@ -108,6 +110,38 @@ targets:
           - "CoreFoundation"
           - "-framework"
           - "Security"
+        CODE_SIGN_STYLE: Manual
+        CODE_SIGN_IDENTITY: ""
+        DEVELOPMENT_TEAM: ""
+        PROVISIONING_PROFILE_SPECIFIER: ""
+
+  FreeTurnControl:
+    type: app-extension
+    platform: iOS
+    deploymentTarget: "18.0"
+    sources:
+      - path: FreeTurnControl
+    info:
+      path: FreeTurnControl/Info.plist
+      properties:
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        CFBundleDisplayName: FreeTurn
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    entitlements:
+      path: FreeTurnControl/FreeTurnControl.entitlements
+      properties:
+        com.apple.developer.networking.networkextension:
+          - packet-tunnel-provider
+        com.apple.security.application-groups:
+          - group.com.purkalolka.freeturn
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.purkalolka.freeturn.control
+        PRODUCT_NAME: FreeTurnControl
+        SWIFT_VERSION: "5.0"
+        TARGETED_DEVICE_FAMILY: "1"
         CODE_SIGN_STYLE: Manual
         CODE_SIGN_IDENTITY: ""
         DEVELOPMENT_TEAM: ""
