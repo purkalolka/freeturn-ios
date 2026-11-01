@@ -16,7 +16,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         SharedLog.clear()
         SharedLog.captchaURL = nil
         MobileTuneForExtension()
-        SharedLog.write("[EXT] startTunnel called")
+        SharedLog.write("[EXT] startTunnel called, build \(Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?"), group \(SharedLog.groupID)")
         let conf = (protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration ?? [:]
         guard let configJSON = conf["configJSON"] as? String,
               let wgText = conf["wgText"] as? String,
@@ -198,10 +198,19 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
     override func handleAppMessage(_ messageData: Data, completionHandler: ((Data?) -> Void)?) {
         var info = SharedLog.snapshot()
+        info["build"] = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?"
+        info["group"] = SharedLog.groupID
         if let st = MobileGetState() {
             info["streams"] = String(st.streams)
             info["total"] = String(st.total)
         }
+        var data = try? JSONSerialization.data(withJSONObject: info)
+        if data == nil {
+            // Never reply with nil: the app could not tell that apart from "handler not implemented".
+            data = try? JSONSerialization.data(withJSONObject: ["build": info["build"] ?? "?", "error": "log not encodable"])
+        }
+        completionHandler?(data)
+    }
         let data = try? JSONSerialization.data(withJSONObject: info)
         completionHandler?(data)
     }

@@ -55,6 +55,7 @@ jobs:
             -destination 'generic/platform=iOS' \
             -archivePath build/FreeTurn.xcarchive \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            CURRENT_PROJECT_VERSION=${{ github.run_number }} \
             DEVELOPMENT_TEAM="" \
             clean archive
 

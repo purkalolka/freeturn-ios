@@ -12,6 +12,7 @@ final class VPNController: ObservableObject {
     @Published var remoteLog = ""
     @Published var remoteCaptcha: String?
     @Published var streams = 0
+    @Published var extBuild = "unknown"
     @Published var ipcStatus = "not queried yet"
     @Published var totalStreams = 0
 
@@ -100,6 +101,7 @@ final class VPNController: ObservableObject {
                     self?.remoteCaptcha = c.isEmpty ? nil : c
                     self?.streams = Int(obj["streams"] ?? "") ?? 0
                     self?.totalStreams = Int(obj["total"] ?? "") ?? 0
+                    self?.extBuild = obj["build"] ?? "?"
                     self?.ipcStatus = "ok, extension log \(self?.remoteLog.count ?? 0) chars, streams \(self?.streams ?? 0)/\(self?.totalStreams ?? 0)"
                 }
             }
@@ -115,7 +117,7 @@ final class VPNController: ObservableObject {
         } else {
             raw = "no VPN configuration saved"
         }
-        return SharedLog.diagnostics + "\nextension: \(extensionBundleId)\nvpn status: \(raw)\nextension link: \(ipcStatus)\nlast error: \(lastError ?? "none")"
+        return SharedLog.diagnostics + "\nextension: \(extensionBundleId)\nvpn status: \(raw)\napp build: \(Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?")\nextension build: \(extBuild)\nextension link: \(ipcStatus)\nlast error: \(lastError ?? "none")"
     }
 
     func stop() {
