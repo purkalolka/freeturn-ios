@@ -55,8 +55,14 @@ struct FreeTurnControl: ControlWidget {
     var body: some ControlWidgetConfiguration {
         StaticControlConfiguration(kind: controlKind, provider: VPNValueProvider()) { isOn in
             ControlWidgetToggle("FreeTurn", isOn: isOn, action: ToggleVPNIntent()) { on in
-                // Control Center only renders SF Symbols / custom symbol templates, not plain images.
-                Label(on ? "On" : "Off", systemImage: on ? "diamond.inset.filled" : "diamond")
+                // Custom symbol templates (Assets.xcassets/*.symbolset): Control Center does not
+                // render plain images. Falls back to an SF Symbol if the asset is missing.
+                let asset = on ? "FreeTurnLogoOn" : "FreeTurnLogoOff"
+                if UIImage(named: asset) != nil {
+                    Label(on ? "On" : "Off", image: asset)
+                } else {
+                    Label(on ? "On" : "Off", systemImage: on ? "diamond.inset.filled" : "diamond")
+                }
             }
         }
         .displayName("FreeTurn VPN")
