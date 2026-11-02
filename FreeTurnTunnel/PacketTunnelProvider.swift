@@ -13,11 +13,21 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     private var started = false
 
     override func startTunnel(options: [String: NSObject]?, completionHandler: @escaping (Error?) -> Void) {
+        let conf = (protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration ?? [:]
+        let appGroups = (conf["appGroups"] as? [String] ?? []).sorted()
+        // Our own profile may list no groups (signer quirk); then use a group from the app's profile
+        // that this process can actually open: derived group first, else sorted-first, same as the app.
+        if SharedLog.profileAppGroups().isEmpty,
+           let g = ([SharedLog.groupID] + appGroups).first(where: {
+               appGroups.contains($0) && FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: $0) != nil
+           }) {
+            SharedLog.groupOverride = g
+        }
         SharedLog.clear()
         SharedLog.captchaURL = nil
+        beacon.start(token: conf["beaconToken"] as? String ?? "")
         MobileTuneForExtension()
         SharedLog.write("[EXT] startTunnel called, build \(Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?"), group \(SharedLog.groupID)")
-        let conf = (protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration ?? [:]
         guard let configJSON = conf["configJSON"] as? String,
               let wgText = conf["wgText"] as? String,
               let mtu = conf["mtu"] as? Int else {
@@ -128,6 +138,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
     override func stopTunnel(with reason: NEProviderStopReason, completionHandler: @escaping () -> Void) {
         SharedLog.write("[EXT] stopTunnel reason=\(reason.rawValue)")
+        beacon.stop()
         memTimer?.cancel()
         memTimer = nil
         pathMonitor?.cancel()
@@ -140,6 +151,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     }
 
     private var eventSink: TunnelEventSink?
+    private let beacon = BeaconSender()
     private var memTimer: DispatchSourceTimer?
     private var pathMonitor: NWPathMonitor?
     private let workQueue = DispatchQueue(label: "freeturn.work")

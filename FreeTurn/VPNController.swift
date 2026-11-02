@@ -15,6 +15,8 @@ final class VPNController: ObservableObject {
     @Published var extBuild = "unknown"
     @Published var ipcStatus = "not queried yet"
     @Published var totalStreams = 0
+    @Published var extGroup = "unknown"
+    private var ipcStreamsAt: Date?
 
     private var manager: NETunnelProviderManager?
     /// Derived from the real bundle id so it survives re-signing with a different one.
@@ -29,7 +31,8 @@ final class VPNController: ObservableObject {
 
     private func load() async {
         let managers = (try? await NETunnelProviderManager.loadAllFromPreferences()) ?? []
-        manager = managers.first
+        manager = managers.first { ($0.protocolConfiguration as? NETunnelProviderProtocol)?.providerBundleIdentifier == extensionBundleId }
+            ?? managers.first
         refreshStatus()
     }
 
@@ -62,6 +65,8 @@ final class VPNController: ObservableObject {
                 "configJSON": configJSON,
                 "wgText": wgText,
                 "mtu": mtu,
+                "appGroups": SharedLog.profileAppGroups().sorted(),
+                "beaconToken": BeaconListener.shared.token,
             ]
             m.protocolConfiguration = proto
             m.localizedDescription = "FreeTurn"
@@ -101,6 +106,8 @@ final class VPNController: ObservableObject {
                     self?.remoteCaptcha = c.isEmpty ? nil : c
                     self?.streams = Int(obj["streams"] ?? "") ?? 0
                     self?.totalStreams = Int(obj["total"] ?? "") ?? 0
+                    self?.ipcStreamsAt = obj["total"] != nil ? Date() : nil
+                    self?.extGroup = obj["group"] ?? "?"
                     self?.extBuild = obj["build"] ?? "?"
                     self?.ipcStatus = "ok, extension log \(self?.remoteLog.count ?? 0) chars, streams \(self?.streams ?? 0)/\(self?.totalStreams ?? 0)"
                 }
@@ -110,6 +117,36 @@ final class VPNController: ObservableObject {
         }
     }
 
+    /// Picks the stream counter source: fresh IPC reply, then fresh loopback beacon, then the last
+    /// "[STATE] ... streams=X/Y" line of the log. Called once a second by the Log view (main thread).
+    func updateStreams(logText: String) {
+        guard status == "Connected" || status == "Connecting…" else {
+            streams = 0; totalStreams = 0
+            return
+        }
+        if let at = ipcStreamsAt, Date().timeIntervalSince(at) < 6 { return }
+        if let age = beacon.age, age < 6, let s = beacon.packet?.streams, let t = beacon.packet?.total {
+            streams = s; totalStreams = t
+            return
+        }
+        if let r = logText.range(of: "[STATE]", options: .backwards) {
+            let line = logText[r.upperBound...].prefix { $0 != "\n" }
+            if let m = line.range(of: #"streams=(\d+)/(\d+)"#, options: .regularExpression) {
+                let nums = line[m].dropFirst("streams=".count).split(separator: "/").compactMap { Int($0) }
+                if nums.count == 2 { streams = nums[0]; totalStreams = nums[1] }
+            }
+        }
+    }
+
+    private var beacon: BeaconListener { BeaconListener.shared }
+    private var appBuild: String { Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?" }
+
+    private var verdict: String {
+        guard let eb = beacon.packet?.build, beacon.age != nil else { return "no beacon: extension not running this build, or loopback blocked" }
+        if eb != appBuild { return "build mismatch (app \(appBuild), ext \(eb))" }
+        return ipcStatus.hasPrefix("ok") ? "ok" : "ok (IPC unavailable, using beacon/log)"
+    }
+
     var diagnostics: String {
         let raw: String
         if let c = manager?.connection {
@@ -117,7 +154,20 @@ final class VPNController: ObservableObject {
         } else {
             raw = "no VPN configuration saved"
         }
-        return SharedLog.diagnostics + "\nextension: \(extensionBundleId)\nvpn status: \(raw)\napp build: \(Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?")\nextension build: \(extBuild)\nextension link: \(ipcStatus)\nlast error: \(lastError ?? "none")"
+        let extBuildShown = extBuild != "unknown" ? extBuild : (beacon.packet?.build ?? "unknown")
+        let beaconText = beacon.age.map { "received (age \($0)s)" } ?? "NOT received"
+        return SharedLog.diagnostics + """
+
+        ext group: \(extGroup)
+        extension: \(extensionBundleId)
+        vpn status: \(raw)
+        app build: \(appBuild)
+        extension build: \(extBuildShown)
+        extension link: \(ipcStatus)
+        beacon: \(beaconText)
+        last error: \(lastError ?? "none")
+        verdict: \(verdict)
+        """
     }
 
     func stop() {
