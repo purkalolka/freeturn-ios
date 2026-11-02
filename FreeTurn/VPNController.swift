@@ -18,6 +18,7 @@ final class VPNController: ObservableObject {
     @Published var extGroup = "unknown"
     private var appProbes: [GroupProbeResult] = []
     private var probeTick = 0
+    private var ipcStreamsAt: Date?
 
     private var manager: NETunnelProviderManager?
     /// Derived from the real bundle id so it survives re-signing with a different one.
@@ -106,6 +107,7 @@ final class VPNController: ObservableObject {
                     self?.remoteCaptcha = c.isEmpty ? nil : c
                     self?.streams = Int(obj["streams"] ?? "") ?? 0
                     self?.totalStreams = Int(obj["total"] ?? "") ?? 0
+                    self?.ipcStreamsAt = obj["total"] != nil ? Date() : nil
                     self?.extBuild = obj["build"] ?? "?"
                     self?.extGroup = obj["group"] ?? "?"
                     self?.ipcStatus = "ok, extension log \(self?.remoteLog.count ?? 0) chars, streams \(self?.streams ?? 0)/\(self?.totalStreams ?? 0)"
@@ -127,6 +129,27 @@ final class VPNController: ObservableObject {
     var beaconProfileGroups: [String] { beacon.state?.profileGroups ?? [] }
     var beaconProbes: [GroupProbeResult] { beacon.state?.probes ?? [] }
     var beaconEntitledGroups: [String] { beacon.state?.entitledGroups ?? [] }
+
+    /// Picks the stream counter source: fresh IPC reply, then fresh beacon, then the last
+    /// "[STATE] ... streams=X/Y" line of the log. Called once a second by the Log view.
+    func updateStreams(logText: String) {
+        guard status == "Connected" || status == "Connecting…" else {
+            streams = 0; totalStreams = 0
+            return
+        }
+        if let at = ipcStreamsAt, Date().timeIntervalSince(at) < 6 { return }
+        if let age = beaconAge, age < 6, let s = beacon.state?.streams, let t = beacon.state?.total {
+            streams = s; totalStreams = t
+            return
+        }
+        if let r = logText.range(of: "[STATE]", options: .backwards) {
+            let line = logText[r.upperBound...].prefix { $0 != "\n" }
+            if let m = line.range(of: #"streams=(\d+)/(\d+)"#, options: .regularExpression) {
+                let nums = line[m].dropFirst("streams=".count).split(separator: "/").compactMap { Int($0) }
+                if nums.count == 2 { streams = nums[0]; totalStreams = nums[1] }
+            }
+        }
+    }
 
     /// Re-runs the App Group probes every ~5 calls (called once a second by the Log view).
     func tickProbes() {

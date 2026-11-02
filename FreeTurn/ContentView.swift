@@ -80,6 +80,7 @@ struct ContentView: View {
         } else {
             logText = "No log yet.\n\n" + vpn.diagnostics
         }
+        vpn.updateStreams(logText: logText)
         captchaURL = vpn.remoteCaptcha ?? SharedLog.captchaURL
     }
 
