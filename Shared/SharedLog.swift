@@ -6,14 +6,20 @@ import Foundation
 enum SharedLog {
     /// App Group actually granted by the provisioning profile embedded by the signer, so it
     /// survives re-signing under any bundle id. Falls back to "group.<bundle id>".
-    static let groupID: String = {
+    static var groupID: String { groupOverride ?? defaultGroupID }
+
+    /// Set once by the extension in startTunnel, before any log write or other thread starts, when
+    /// its own profile lists no groups; read-only afterwards.
+    static var groupOverride: String?
+
+    private static let defaultGroupID: String = {
         var id = Bundle.main.bundleIdentifier ?? "com.purkalolka.freeturn"
         if id.hasSuffix(".tunnel") { id.removeLast(".tunnel".count) }
         if id.hasSuffix(".control") { id.removeLast(".control".count) }
         let derived = "group." + id
         let groups = profileAppGroups()
         if groups.contains(derived) { return derived }
-        return groups.first ?? derived
+        return groups.sorted().first ?? derived
     }()
 
     /// Human-readable signing/App Group state, shown in the app when the log is empty.
@@ -28,7 +34,7 @@ enum SharedLog {
         """
     }
 
-    private static func profileAppGroups() -> [String] {
+    static func profileAppGroups() -> [String] {
         guard let path = Bundle.main.path(forResource: "embedded", ofType: "mobileprovision"),
               let raw = try? Data(contentsOf: URL(fileURLWithPath: path)),
               let start = raw.range(of: Data("<?xml".utf8)),

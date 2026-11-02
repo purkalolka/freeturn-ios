@@ -14,7 +14,11 @@ struct FreeTurnVPNError: Error, CustomLocalizedStringResourceConvertible {
 
 private func loadManager() async throws -> NETunnelProviderManager {
     let managers = try await NETunnelProviderManager.loadAllFromPreferences()
-    guard let m = managers.first else {
+    var appId = Bundle.main.bundleIdentifier ?? ""
+    if appId.hasSuffix(".control") { appId.removeLast(".control".count) }
+    let m = managers.first { ($0.protocolConfiguration as? NETunnelProviderProtocol)?.providerBundleIdentifier == appId + ".tunnel" }
+        ?? managers.first
+    guard let m = m else {
         throw FreeTurnVPNError(localizedStringResource: "Open FreeTurn and start the VPN once first")
     }
     return m
