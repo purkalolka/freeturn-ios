@@ -28,7 +28,7 @@ enum SharedLog {
         """
     }
 
-    private static func profileAppGroups() -> [String] {
+    static func profileAppGroups() -> [String] {
         guard let path = Bundle.main.path(forResource: "embedded", ofType: "mobileprovision"),
               let raw = try? Data(contentsOf: URL(fileURLWithPath: path)),
               let start = raw.range(of: Data("<?xml".utf8)),

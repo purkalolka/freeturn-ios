@@ -15,6 +15,9 @@ final class VPNController: ObservableObject {
     @Published var extBuild = "unknown"
     @Published var ipcStatus = "not queried yet"
     @Published var totalStreams = 0
+    @Published var extGroup = "unknown"
+    private var appProbes: [GroupProbeResult] = []
+    private var probeTick = 0
 
     private var manager: NETunnelProviderManager?
     /// Derived from the real bundle id so it survives re-signing with a different one.
@@ -103,12 +106,52 @@ final class VPNController: ObservableObject {
                     self?.streams = Int(obj["streams"] ?? "") ?? 0
                     self?.totalStreams = Int(obj["total"] ?? "") ?? 0
                     self?.extBuild = obj["build"] ?? "?"
+                    self?.extGroup = obj["group"] ?? "?"
                     self?.ipcStatus = "ok, extension log \(self?.remoteLog.count ?? 0) chars, streams \(self?.streams ?? 0)/\(self?.totalStreams ?? 0)"
                 }
             }
         } catch {
             ipcStatus = "send failed: \(error.localizedDescription)"
         }
+    }
+
+    // MARK: loopback beacon state
+
+    private var beacon: BeaconListener { BeaconListener.shared }
+    var beaconReceived: Bool { beacon.received }
+    var beaconAge: Int? { beacon.age }
+    var beaconBuild: String? { beacon.state?.build }
+    var beaconGroup: String? { beacon.state?.groupID }
+    var beaconBundleId: String? { beacon.state?.bundleId }
+    var beaconProfileGroups: [String] { beacon.state?.profileGroups ?? [] }
+    var beaconProbes: [GroupProbeResult] { beacon.state?.probes ?? [] }
+
+    /// Re-runs the App Group probes every ~5 calls (called once a second by the Log view).
+    func tickProbes() {
+        if probeTick % 5 == 0 { appProbes = GroupProbe.run() }
+        probeTick += 1
+    }
+
+    private var appBuild: String { Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?" }
+
+    /// Groups where app and extension markers see each other, from our own disk view and the extension's.
+    private var commonGroups: [String] {
+        Array(Set(GroupProbe.common(appProbes) + GroupProbe.common(beaconProbes))).sorted()
+    }
+
+    private var effectiveExtBuild: String {
+        extBuild != "unknown" ? extBuild : (beaconBuild ?? "unknown")
+    }
+
+    private func verdict(fileLogEmpty: Bool) -> String {
+        guard beaconReceived else { return "ext not running current code, or loopback blocked" }
+        let eb = beaconBuild ?? "?"
+        guard eb == appBuild else { return "build mismatch (app \(appBuild), ext \(eb))" }
+        if ipcStatus == "extension replied with nothing" { return "ext code ok, IPC blocked by system" }
+        if ipcStatus.hasPrefix("ok") {
+            return fileLogEmpty && commonGroups.isEmpty ? "no shared group: profile/entitlements" : "ok"
+        }
+        return "ok (ipc: \(ipcStatus))"
     }
 
     var diagnostics: String {
@@ -118,7 +161,33 @@ final class VPNController: ObservableObject {
         } else {
             raw = "no VPN configuration saved"
         }
-        return SharedLog.diagnostics + "\nextension: \(extensionBundleId)\nvpn status: \(raw)\napp build: \(Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?")\nextension build: \(extBuild)\nextension link: \(ipcStatus)\nlast error: \(lastError ?? "none")"
+        let fileLogEmpty = SharedLog.read().isEmpty
+        let probes = (appProbes.isEmpty ? "n/a" : appProbes.map { "\($0.group) container=\($0.container) wrote=\($0.wrote) seen=\($0.seen.joined(separator: "+"))" }.joined(separator: "\n  "))
+        let extProbes = beaconProbes.isEmpty ? "n/a" : beaconProbes.map { "\($0.group) container=\($0.container) wrote=\($0.wrote) seen=\($0.seen.joined(separator: "+"))" }.joined(separator: "\n  ")
+        let extGrp = beaconGroup ?? (extGroup == "unknown" ? nil : extGroup)
+        let sameGroup = extGrp.map { $0 == SharedLog.groupID ? "same" : "DIFFERENT (app \(SharedLog.groupID), ext \($0))" } ?? "unknown"
+        return SharedLog.diagnostics + """
+
+        extension: \(extensionBundleId)
+        vpn status: \(raw)
+        app build: \(appBuild)
+        extension build: \(effectiveExtBuild)
+        extension link: \(ipcStatus)
+        last error: \(lastError ?? "none")
+        beacon: \(beaconReceived ? "received (age \(beaconAge ?? -1)s)" : "NOT received") [listener: \(beacon.listenerState)]
+        beacon build: \(beaconBuild ?? "-")
+        beacon bundle: \(beaconBundleId ?? "-")
+        beacon group: \(beaconGroup ?? "-")
+        beacon profile groups: \(beaconProfileGroups.isEmpty ? "-" : beaconProfileGroups.joined(separator: ", "))
+        ipc: extBuild=\(extBuild) extGroup=\(extGroup) status=\(ipcStatus)
+        common groups: \(commonGroups.isEmpty ? "none" : commonGroups.joined(separator: ", "))
+        app group vs ext group: \(sameGroup)
+        app probes:
+          \(probes)
+        ext probes:
+          \(extProbes)
+        VERDICT: \(verdict(fileLogEmpty: fileLogEmpty))
+        """
     }
 
     func stop() {

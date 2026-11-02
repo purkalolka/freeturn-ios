@@ -15,6 +15,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     override func startTunnel(options: [String: NSObject]?, completionHandler: @escaping (Error?) -> Void) {
         SharedLog.clear()
         SharedLog.captchaURL = nil
+        beacon.start()
         MobileTuneForExtension()
         SharedLog.write("[EXT] startTunnel called, build \(Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?"), group \(SharedLog.groupID)")
         let conf = (protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration ?? [:]
@@ -128,6 +129,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
     override func stopTunnel(with reason: NEProviderStopReason, completionHandler: @escaping () -> Void) {
         SharedLog.write("[EXT] stopTunnel reason=\(reason.rawValue)")
+        beacon.stop()
         memTimer?.cancel()
         memTimer = nil
         pathMonitor?.cancel()
@@ -140,6 +142,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     }
 
     private var eventSink: TunnelEventSink?
+    private let beacon = BeaconSender()
     private var memTimer: DispatchSourceTimer?
     private var pathMonitor: NWPathMonitor?
     private let workQueue = DispatchQueue(label: "freeturn.work")

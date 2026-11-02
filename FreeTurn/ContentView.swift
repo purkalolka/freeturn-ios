@@ -7,6 +7,8 @@ struct ContentView: View {
     @State private var captchaURL: String?
     @State private var showLog = false
     @Environment(\.openURL) private var openURL
+    @Environment(\.scenePhase) private var scenePhase
+    @ObservedObject private var beacon = BeaconListener.shared
 
     @AppStorage("clientId") private var clientId: String = UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
     @AppStorage("freeturnLink") private var freeturnLink: String = ""
@@ -48,8 +50,11 @@ struct ContentView: View {
                 .padding()
             }
             .navigationTitle("FreeTurn")
-            .onAppear { startLogPolling() }
+            .onAppear { beacon.start(); startLogPolling() }
             .onDisappear { logTimer?.invalidate() }
+            .onChange(of: scenePhase) { phase in
+                if phase == .active { beacon.start() } else if phase == .background { beacon.stop() }
+            }
         }
         .navigationViewStyle(.stack)
     }
@@ -64,8 +69,17 @@ struct ContentView: View {
 
     private func refreshLog() {
         vpn.fetchLog()
+        vpn.tickProbes()
         let fileLog = SharedLog.read()
-        logText = vpn.remoteLog.isEmpty ? fileLog : vpn.remoteLog
+        if !vpn.remoteLog.isEmpty {
+            logText = vpn.remoteLog
+        } else if !fileLog.isEmpty {
+            logText = fileLog
+        } else if !beacon.logTail.isEmpty {
+            logText = "[via loopback]\n" + beacon.logTail.joined(separator: "\n") + "\n\n--- diagnostics ---\n" + vpn.diagnostics
+        } else {
+            logText = "No log yet.\n\n" + vpn.diagnostics
+        }
         captchaURL = vpn.remoteCaptcha ?? SharedLog.captchaURL
     }
 
@@ -77,7 +91,7 @@ struct ContentView: View {
                 Button("Refresh") { refreshLog() }.font(.caption)
             }
             ScrollView {
-                Text(logText.isEmpty ? "No log yet.\n\n" + vpn.diagnostics : logText)
+                Text(logText)
                     .font(.system(.caption2, design: .monospaced))
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .textSelection(.enabled)
