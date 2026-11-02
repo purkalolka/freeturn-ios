@@ -13,12 +13,21 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     private var started = false
 
     override func startTunnel(options: [String: NSObject]?, completionHandler: @escaping (Error?) -> Void) {
+        let conf = (protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration ?? [:]
+        let appGroups = (conf["appGroups"] as? [String] ?? []).sorted()
+        // Our own profile may list no groups (signer quirk); fall back to a group the app's profile
+        // has that this process can actually open. Must happen before the first SharedLog.write.
+        if SharedLog.profileAppGroups().isEmpty,
+           // Same order as the app: its derived group if its profile has it, else the sorted-first.
+           let g = ([SharedLog.groupID] + appGroups).first(where: { appGroups.contains($0) && FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: $0) != nil }) {
+            SharedLog.groupOverride = g
+        }
         SharedLog.clear()
         SharedLog.captchaURL = nil
+        beacon.appGroups = appGroups
         beacon.start()
         MobileTuneForExtension()
         SharedLog.write("[EXT] startTunnel called, build \(Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?"), group \(SharedLog.groupID)")
-        let conf = (protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration ?? [:]
         guard let configJSON = conf["configJSON"] as? String,
               let wgText = conf["wgText"] as? String,
               let mtu = conf["mtu"] as? Int else {
@@ -200,6 +209,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     }
 
     override func handleAppMessage(_ messageData: Data, completionHandler: ((Data?) -> Void)?) {
+        SharedLog.bumpAppMessages()
         var info = SharedLog.snapshot()
         info["build"] = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?"
         info["group"] = SharedLog.groupID

@@ -6,7 +6,12 @@ import Foundation
 enum SharedLog {
     /// App Group actually granted by the provisioning profile embedded by the signer, so it
     /// survives re-signing under any bundle id. Falls back to "group.<bundle id>".
-    static let groupID: String = {
+    static var groupID: String { groupOverride ?? defaultGroupID }
+
+    /// Set once by the extension (before any write) when its own profile lists no groups.
+    static var groupOverride: String?
+
+    private static let defaultGroupID: String = {
         var id = Bundle.main.bundleIdentifier ?? "com.purkalolka.freeturn"
         if id.hasSuffix(".tunnel") { id.removeLast(".tunnel".count) }
         if id.hasSuffix(".control") { id.removeLast(".control".count) }
@@ -27,6 +32,30 @@ enum SharedLog {
         group container: \(container == nil ? "UNAVAILABLE" : "ok")
         """
     }
+
+    /// Whether embedded.mobileprovision exists in this bundle, its size, and whether it parsed.
+    static func profileStatus() -> (present: Bool, size: Int, parseOK: Bool, groups: Int) {
+        guard let path = Bundle.main.path(forResource: "embedded", ofType: "mobileprovision") else {
+            return (false, 0, false, 0)
+        }
+        let size = (try? Data(contentsOf: URL(fileURLWithPath: path)).count) ?? 0
+        let groups = profileAppGroups()
+        return (true, size, size > 0 && profileParses(path), groups.count)
+    }
+
+    private static func profileParses(_ path: String) -> Bool {
+        guard let raw = try? Data(contentsOf: URL(fileURLWithPath: path)),
+              let start = raw.range(of: Data("<?xml".utf8)),
+              let end = raw.range(of: Data("</plist>".utf8)),
+              start.lowerBound < end.upperBound else { return false }
+        return (try? PropertyListSerialization.propertyList(
+            from: raw.subdata(in: start.lowerBound..<end.upperBound), format: nil)) != nil
+    }
+
+    private static let countLock = NSLock()
+    private static var appMessages = 0
+    static func bumpAppMessages() { countLock.lock(); appMessages += 1; countLock.unlock() }
+    static var appMessageCount: Int { countLock.lock(); defer { countLock.unlock() }; return appMessages }
 
     static func profileAppGroups() -> [String] {
         guard let path = Bundle.main.path(forResource: "embedded", ofType: "mobileprovision"),

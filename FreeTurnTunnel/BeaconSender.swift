@@ -10,6 +10,8 @@ final class BeaconSender {
     private var conn: NWConnection?
     private var tick = 0
     private var probes: [GroupProbeResult] = []
+    /// Groups the app's profile lists (passed via providerConfiguration); set before start().
+    var appGroups: [String] = []
 
     func start() {
         queue.async {
@@ -58,7 +60,7 @@ final class BeaconSender {
     }
 
     private func fire() {
-        if tick % 5 == 0 { probes = GroupProbe.run() }
+        if tick % 5 == 0 { probes = GroupProbe.run(extra: appGroups) }
         tick += 1
 
         var state = BeaconPacket(type: "state")
@@ -72,6 +74,14 @@ final class BeaconSender {
             state.total = st.total
         }
         state.t = Int(Date().timeIntervalSince1970)
+        let ps = SharedLog.profileStatus()
+        state.profilePresent = ps.present
+        state.profileSize = ps.size
+        state.profileParseOK = ps.parseOK
+        state.profileGroupsCount = ps.groups
+        state.entitledGroups = probes.filter { appGroups.contains($0.group) && $0.container == "ok" }.map { $0.group }
+        state.handleAppMessageCount = SharedLog.appMessageCount
+        state.chosenGroup = SharedLog.groupID
         // Keep profileGroups; shrink probe detail instead if the datagram gets too big.
         if ((try? JSONEncoder().encode(state))?.count ?? 0) > 4000 {
             state.probes = state.probes?.map { GroupProbeResult(group: $0.group, container: $0.container, wrote: $0.wrote, seen: []) }

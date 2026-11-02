@@ -20,9 +20,10 @@ enum GroupProbe {
         return "app"
     }
 
-    static func run() -> [GroupProbeResult] {
-        var groups = SharedLog.profileAppGroups()
-        if !groups.contains(SharedLog.groupID) { groups.append(SharedLog.groupID) }
+    /// Probes the union of the profile's groups, `extra` and the currently chosen group.
+    static func run(extra: [String] = []) -> [GroupProbeResult] {
+        var groups: [String] = []
+        for g in SharedLog.profileAppGroups() + extra + [SharedLog.groupID] where !groups.contains(g) { groups.append(g) }
         let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?"
         let body = "build=\(build)\nbundleId=\(Bundle.main.bundleIdentifier ?? "?")\nt=\(Int(Date().timeIntervalSince1970))\n"
         return groups.map { g in

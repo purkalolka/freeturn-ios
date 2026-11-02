@@ -66,6 +66,7 @@ final class VPNController: ObservableObject {
                 "configJSON": configJSON,
                 "wgText": wgText,
                 "mtu": mtu,
+                "appGroups": SharedLog.profileAppGroups().sorted(),
             ]
             m.protocolConfiguration = proto
             m.localizedDescription = "FreeTurn"
@@ -125,6 +126,7 @@ final class VPNController: ObservableObject {
     var beaconBundleId: String? { beacon.state?.bundleId }
     var beaconProfileGroups: [String] { beacon.state?.profileGroups ?? [] }
     var beaconProbes: [GroupProbeResult] { beacon.state?.probes ?? [] }
+    var beaconEntitledGroups: [String] { beacon.state?.entitledGroups ?? [] }
 
     /// Re-runs the App Group probes every ~5 calls (called once a second by the Log view).
     func tickProbes() {
@@ -147,6 +149,9 @@ final class VPNController: ObservableObject {
         guard beaconReceived else { return "ext not running current code, or loopback blocked" }
         let eb = beaconBuild ?? "?"
         guard eb == appBuild else { return "build mismatch (app \(appBuild), ext \(eb))" }
+        if !beaconEntitledGroups.isEmpty && !commonGroups.isEmpty && fileLogEmpty {
+            return "shared group available, file log should work"
+        }
         if ipcStatus == "extension replied with nothing" { return "ext code ok, IPC blocked by system" }
         if ipcStatus.hasPrefix("ok") {
             return fileLogEmpty && commonGroups.isEmpty ? "no shared group: profile/entitlements" : "ok"
@@ -179,6 +184,10 @@ final class VPNController: ObservableObject {
         beacon bundle: \(beaconBundleId ?? "-")
         beacon group: \(beaconGroup ?? "-")
         beacon profile groups: \(beaconProfileGroups.isEmpty ? "-" : beaconProfileGroups.joined(separator: ", "))
+        ext profile: present=\(beacon.state?.profilePresent.map(String.init) ?? "-") size=\(beacon.state?.profileSize.map(String.init) ?? "-") parseOK=\(beacon.state?.profileParseOK.map(String.init) ?? "-") groups=\(beacon.state?.profileGroupsCount.map(String.init) ?? "-")
+        ext chosen group: \(beacon.state?.chosenGroup ?? "-")
+        ext entitled groups: \(beaconEntitledGroups.isEmpty ? "none" : beaconEntitledGroups.joined(separator: ", "))
+        handleAppMessage calls: \(beacon.state?.handleAppMessageCount.map(String.init) ?? "-")
         ipc: extBuild=\(extBuild) extGroup=\(extGroup) status=\(ipcStatus)
         common groups: \(commonGroups.isEmpty ? "none" : commonGroups.joined(separator: ", "))
         app group vs ext group: \(sameGroup)

@@ -17,4 +17,11 @@ struct BeaconPacket: Codable {
     var total: Int?
     var t: Int?
     var logTail: [String]?
+    var profilePresent: Bool?
+    var profileSize: Int?
+    var profileParseOK: Bool?
+    var profileGroupsCount: Int?
+    var entitledGroups: [String]?
+    var handleAppMessageCount: Int?
+    var chosenGroup: String?
 }
