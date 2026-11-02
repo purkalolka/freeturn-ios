@@ -29,7 +29,8 @@ final class VPNController: ObservableObject {
 
     private func load() async {
         let managers = (try? await NETunnelProviderManager.loadAllFromPreferences()) ?? []
-        manager = managers.first
+        manager = managers.first { ($0.protocolConfiguration as? NETunnelProviderProtocol)?.providerBundleIdentifier == extensionBundleId }
+            ?? managers.first
         refreshStatus()
     }
 
