@@ -121,6 +121,7 @@ targets:
     deploymentTarget: "18.0"
     sources:
       - path: FreeTurnControl
+      - path: Shared
     info:
       path: FreeTurnControl/Info.plist
       properties:

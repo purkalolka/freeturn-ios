@@ -72,10 +72,11 @@ final class BeaconSender {
             state.total = st.total
         }
         state.t = Int(Date().timeIntervalSince1970)
-        if let data = try? JSONEncoder().encode(state), data.count > 1200 {
-            state.profileGroups = nil
+        // Keep profileGroups; shrink probe detail instead if the datagram gets too big.
+        if ((try? JSONEncoder().encode(state))?.count ?? 0) > 4000 {
+            state.probes = state.probes?.map { GroupProbeResult(group: $0.group, container: $0.container, wrote: $0.wrote, seen: []) }
         }
-        send(state, limit: 1200)
+        send(state, limit: 4000)
 
         // Log goes in its own datagram (loopback allows far larger than one MTU).
         let lines = (SharedLog.snapshot()["log"] ?? "").split(separator: "\n", omittingEmptySubsequences: true).suffix(30)
