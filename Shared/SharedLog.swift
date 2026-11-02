@@ -13,7 +13,7 @@ enum SharedLog {
         let derived = "group." + id
         let groups = profileAppGroups()
         if groups.contains(derived) { return derived }
-        return groups.first ?? derived
+        return groups.sorted().first ?? derived
     }()
 
     /// Human-readable signing/App Group state, shown in the app when the log is empty.
