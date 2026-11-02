@@ -9,6 +9,13 @@ on:
       tag:
         description: "Release tag (default: build-<run number>)"
         default: ""
+      prerelease:
+        description: "Publish as pre-release (not marked Latest)"
+        type: boolean
+        default: false
+      notes:
+        description: "Release notes (empty = standard text)"
+        default: ""
   push:
     tags: ["v*"]
 
@@ -79,11 +86,20 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_type == 'tag' && github.ref_name || inputs.tag || format('build-{0}', github.run_number) }}
+          PRERELEASE: ${{ inputs.prerelease }}
+          NOTES_INPUT: ${{ inputs.notes }}
         run: |
           CORE_SHA=$(git -C core rev-parse --short HEAD)
-          NOTES="Unsigned IPA (sign it yourself, e.g. via flarestore). Core: purkalolka/free-turn-proxy@$CORE_SHA"
+          if [ -n "$NOTES_INPUT" ]; then
+            printf '%s\n' "$NOTES_INPUT" > "$RUNNER_TEMP/notes.md"
+          else
+            echo "Unsigned IPA (sign it yourself, e.g. via flarestore). Core: purkalolka/free-turn-proxy@$CORE_SHA" > "$RUNNER_TEMP/notes.md"
+          fi
+          FLAGS=()
+          if [ "$PRERELEASE" = "true" ]; then FLAGS+=(--prerelease --latest=false); fi
+          gh --version | head -1
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" build/FreeTurn-unsigned.ipa --clobber
           else
-            gh release create "$TAG" build/FreeTurn-unsigned.ipa --title "FreeTurn $TAG" --notes "$NOTES"
+            gh release create "$TAG" build/FreeTurn-unsigned.ipa --title "FreeTurn $TAG" --notes-file "$RUNNER_TEMP/notes.md" "${FLAGS[@]}"
           fi
