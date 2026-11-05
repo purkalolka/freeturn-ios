@@ -9,6 +9,9 @@ on:
       tag:
         description: "Release tag (default: build-<run number>)"
         default: ""
+      build_number:
+        description: "CFBundleVersion (default: run number)"
+        default: ""
       prerelease:
         description: "Publish as pre-release (not marked Latest)"
         type: boolean
@@ -62,7 +65,7 @@ jobs:
             -destination 'generic/platform=iOS' \
             -archivePath build/FreeTurn.xcarchive \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
-            CURRENT_PROJECT_VERSION=${{ github.run_number }} \
+            CURRENT_PROJECT_VERSION=${{ inputs.build_number || github.run_number }} \
             DEVELOPMENT_TEAM="" \
             clean archive
 
