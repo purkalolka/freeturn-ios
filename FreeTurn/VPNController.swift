@@ -66,7 +66,10 @@ final class VPNController: ObservableObject {
                 "wgText": wgText,
                 "mtu": mtu,
                 "appGroups": SharedLog.profileAppGroups().sorted(),
-                "beaconToken": BeaconListener.shared.token,
+                // The control channel does not need app groups at all; the token only stops a
+                // stale listener from another install from being mistaken for this one.
+                "controlToken": ControlClient.shared.token,
+                "beaconToken": ControlClient.shared.token,
             ]
             m.protocolConfiguration = proto
             m.localizedDescription = "FreeTurn"
@@ -117,16 +120,18 @@ final class VPNController: ObservableObject {
         }
     }
 
-    /// Picks the stream counter source: fresh IPC reply, then fresh loopback beacon, then the last
-    /// "[STATE] ... streams=X/Y" line of the log. Called once a second by the Log view (main thread).
+    /// Picks the stream counter source: fresh IPC reply, then the fresh loopback control
+    /// channel, then the last "[STATE] ... streams=X/Y" line of the log. Called once a second
+    /// by the Log view (main thread).
     func updateStreams(logText: String) {
         guard status == "Connected" || status == "Connecting…" else {
             streams = 0; totalStreams = 0
             return
         }
         if let at = ipcStreamsAt, Date().timeIntervalSince(at) < 6 { return }
-        if let age = beacon.age, age < 6, let s = beacon.packet?.streams, let t = beacon.packet?.total {
-            streams = s; totalStreams = t
+        if control.connected, let age = control.age, age < Int(ControlConfig.staleAfter) {
+            streams = control.streams
+            totalStreams = control.total
             return
         }
         if let r = logText.range(of: "[STATE]", options: .backwards) {
@@ -138,13 +143,32 @@ final class VPNController: ObservableObject {
         }
     }
 
-    private var beacon: BeaconListener { BeaconListener.shared }
+    /// Copies the control-channel state into the published fields the UI already observes.
+    /// Called from the same one-second refresh as fetchLog so both fallbacks stay in sync.
+    func syncFromControl() {
+        guard control.connected else { return }
+        extBuild = control.extBuild
+        // The control channel is authoritative while it is up, including "captcha cleared".
+        remoteCaptcha = control.captcha
+    }
+
+    var controlStatus: String {
+        if control.connected {
+            return "connected on \(control.port.map(String.init) ?? "?") (age \(control.age ?? -1)s)"
+        }
+        return control.status
+    }
+
+    private var control: ControlClient { ControlClient.shared }
     private var appBuild: String { Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?" }
 
     private var verdict: String {
-        guard let eb = beacon.packet?.build, beacon.age != nil else { return "no beacon: extension not running this build, or loopback blocked" }
-        if eb != appBuild { return "build mismatch (app \(appBuild), ext \(eb))" }
-        return ipcStatus.hasPrefix("ok") ? "ok" : "ok (IPC unavailable, using beacon/log)"
+        if control.connected {
+            if control.extBuild != appBuild { return "build mismatch (app \(appBuild), ext \(control.extBuild))" }
+            return ipcStatus.hasPrefix("ok") ? "ok" : "ok (IPC unavailable, using control channel)"
+        }
+        if !SharedLog.read().isEmpty { return "control channel down (\(control.status)), using file log" }
+        return "no control channel (\(control.status)) and no file log"
     }
 
     var diagnostics: String {
@@ -154,8 +178,7 @@ final class VPNController: ObservableObject {
         } else {
             raw = "no VPN configuration saved"
         }
-        let extBuildShown = extBuild != "unknown" ? extBuild : (beacon.packet?.build ?? "unknown")
-        let beaconText = beacon.age.map { "received (age \($0)s)" } ?? "NOT received"
+        let extBuildShown = extBuild != "unknown" ? extBuild : (control.extBuild != "unknown" ? control.extBuild : "unknown")
         return SharedLog.diagnostics + """
 
         ext group: \(extGroup)
@@ -163,8 +186,10 @@ final class VPNController: ObservableObject {
         vpn status: \(raw)
         app build: \(appBuild)
         extension build: \(extBuildShown)
+        tunnel state: \(control.tunnelState)
+        control channel: \(controlStatus)
+        control error: \(control.lastError ?? "none")
         extension link: \(ipcStatus)
-        beacon: \(beaconText)
         last error: \(lastError ?? "none")
         verdict: \(verdict)
         """

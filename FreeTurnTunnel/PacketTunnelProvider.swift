@@ -23,9 +23,21 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
            }) {
             SharedLog.groupOverride = g
         }
+        // The loopback control channel is the primary app<->extension transport: unlike App
+        // Groups and sendProviderMessage it survives a third-party signer that gives the
+        // extension a different (or no) embedded provisioning profile.
+        let controlServer = control
+        SharedLog.onWrite = { [weak controlServer] line, offset in
+            controlServer?.appendLog(line, offset: offset)
+        }
+        SharedLog.onClear = { [weak controlServer] in controlServer?.broadcastClear() }
+        control.onReconnect = { [weak self] in self?.reconnect(reason: "app request") }
+        control.onWake = { [weak self] in self?.reconnect(reason: "wake") }
+        control.start(token: conf["controlToken"] as? String
+            ?? conf["beaconToken"] as? String
+            ?? "")
         SharedLog.clear()
         SharedLog.captchaURL = nil
-        beacon.start(token: conf["beaconToken"] as? String ?? "")
         MobileTuneForExtension()
         SharedLog.write("[EXT] startTunnel called, build \(Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?"), group \(SharedLog.groupID)")
         guard let configJSON = conf["configJSON"] as? String,
@@ -138,7 +150,9 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
     override func stopTunnel(with reason: NEProviderStopReason, completionHandler: @escaping () -> Void) {
         SharedLog.write("[EXT] stopTunnel reason=\(reason.rawValue)")
-        beacon.stop()
+        control.stop()
+        SharedLog.onWrite = nil
+        SharedLog.onClear = nil
         memTimer?.cancel()
         memTimer = nil
         pathMonitor?.cancel()
@@ -151,7 +165,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     }
 
     private var eventSink: TunnelEventSink?
-    private let beacon = BeaconSender()
+    private let control = ControlServer()
     private var memTimer: DispatchSourceTimer?
     private var pathMonitor: NWPathMonitor?
     private let workQueue = DispatchQueue(label: "freeturn.work")

@@ -52,8 +52,24 @@ enum SharedLog {
     private static var memory = ""
     private static var memoryCaptcha = ""
 
+    /// Set by the tunnel extension so the loopback control channel can stream new lines
+    /// without reading the file. Called on the SharedLog queue with the absolute UTF-8 offset
+    /// of the first byte of `line` in the whole (never-trimmed) log stream.
+    static var onWrite: ((String, Int) -> Void)?
+    static var onClear: (() -> Void)?
+
+    /// Total bytes ever written since the last clear. Unlike `memory`, this is not trimmed, so
+    /// it lets the control channel tell "already in the snapshot" from "new since the snapshot".
+    private static var totalWritten = 0
+
     static func snapshot() -> [String: String] {
-        queue.sync { ["log": memory, "captcha": memoryCaptcha] }
+        queue.sync {
+            ["log": memory, "captcha": memoryCaptcha, "offset": String(totalWritten)]
+        }
+    }
+
+    static func snapshotCaptcha() -> String {
+        queue.sync { memoryCaptcha }
     }
 
     static func setMemoryCaptcha(_ v: String?) {
@@ -73,8 +89,13 @@ enum SharedLog {
         queue.async {
             let ts = ISO8601DateFormatter().string(from: Date())
             let entry = "\(ts) \(line)\n"
+            let offset = totalWritten
+            totalWritten += entry.utf8.count
             memory += entry
-            if memory.count > 200_000 { memory = String(memory.suffix(100_000)) }
+            if memory.count > ControlConfig.logLimit {
+                memory = String(memory.suffix(ControlConfig.logLimit / 2))
+            }
+            onWrite?(entry, offset)
             guard let url = url else { return }
             guard let data = entry.data(using: .utf8) else { return }
             if FileManager.default.fileExists(atPath: url.path) {
@@ -92,6 +113,8 @@ enum SharedLog {
     static func clear() {
         queue.async {
             memory = ""
+            totalWritten = 0
+            onClear?()
             guard let url = url else { return }
             try? "".data(using: .utf8)?.write(to: url)
         }

@@ -13,3 +13,13 @@ iOS-клиент для [free-turn-proxy](https://github.com/purkalolka/free-tur
 
 Bundle ID: `com.purkalolka.freeturn` и `com.purkalolka.freeturn.tunnel`, app group
 `group.com.purkalolka.freeturn` (см. `project.yml`, `Shared/SharedLog.swift`, `FreeTurn/VPNController.swift`).
+
+## Канал связи приложение ↔ расширение
+
+Основной транспорт — loopback TCP (`127.0.0.1`, порты `47831–47840`), JSON-lines:
+расширение слушает, приложение подключается. По каналу идут лог, счётчик потоков,
+captcha URL и команды (`snapshot`, `clear`, `reconnect`). Он не зависит от App Group,
+provisioning profile и `sendProviderMessage`, поэтому работает и при подписи сторонним
+подписантом. Файловый лог в App Group и IPC остались как резервные источники.
+Код: `Shared/ControlProtocol.swift`, `FreeTurn/ControlClient.swift`,
+`FreeTurnTunnel/ControlServer.swift`.
