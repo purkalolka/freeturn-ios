@@ -34,9 +34,18 @@ struct ToggleVPNIntent: SetValueIntent {
         let m = try await loadManager()
         if value {
             m.isEnabled = true
+            // Same policy as the app: restore the tunnel automatically after a crash,
+            // jetsam or reboot instead of leaving the VPN silently down.
+            m.isOnDemandEnabled = true
+            let keepAlive = NEOnDemandRuleConnect()
+            keepAlive.interfaceTypeMatch = .any
+            m.onDemandRules = [keepAlive]
             try await m.saveToPreferences()
             try m.connection.startVPNTunnel()
         } else {
+            // On-demand first: otherwise the system starts the tunnel again right away.
+            m.isOnDemandEnabled = false
+            try await m.saveToPreferences()
             m.connection.stopVPNTunnel()
         }
         return .result()

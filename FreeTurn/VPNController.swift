@@ -74,6 +74,13 @@ final class VPNController: ObservableObject {
             m.protocolConfiguration = proto
             m.localizedDescription = "FreeTurn"
             m.isEnabled = true
+            // Bring the tunnel back by itself after a crash, jetsam or reboot: an extension
+            // cannot restart its own process, and without an on-demand rule iOS leaves the
+            // VPN down until the user opens the app again.
+            m.isOnDemandEnabled = true
+            let keepAlive = NEOnDemandRuleConnect()
+            keepAlive.interfaceTypeMatch = .any
+            m.onDemandRules = [keepAlive]
             do {
                 try await m.saveToPreferences()
                 try await m.loadFromPreferences()
@@ -196,7 +203,15 @@ final class VPNController: ObservableObject {
     }
 
     func stop() {
-        manager?.connection.stopVPNTunnel()
+        Task {
+            if let m = manager {
+                // Disable on-demand first, otherwise iOS immediately reconnects the tunnel
+                // that is being stopped.
+                m.isOnDemandEnabled = false
+                try? await m.saveToPreferences()
+            }
+            manager?.connection.stopVPNTunnel()
+        }
     }
 
     @objc private func statusChanged() { refreshStatus() }

@@ -21,4 +21,12 @@ final class NotificationHandler: NSObject, UNUserNotificationCenterDelegate {
         }
         completionHandler()
     }
+
+    /// The tunnel extension posts the captcha alert while the app is already in front;
+    /// without this the banner would be suppressed.
+    func userNotificationCenter(_ center: UNUserNotificationCenter,
+                                willPresent notification: UNNotification,
+                                withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
+        completionHandler([.banner, .sound, .list])
+    }
 }
