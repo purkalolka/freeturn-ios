@@ -20,6 +20,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     private var rawTunFD: Int32?
     private var configJSON = ""
     private var memTicks = 0
+    private var cachedHandshakeAge: Int64 = -1
 
     private let control = ControlServer()
     private let recovery = RecoveryController()
@@ -204,7 +205,12 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     // MARK: - Recovery
 
     private func startRecovery() {
-        recovery.softRecovery = { _ in
+        recovery.streamRecovery = { _ in
+            // Recycles only the streams that stopped receiving; the session, the tunnel and
+            // the other allocations keep running.
+            _ = MobileEnsureStreams()
+        }
+        recovery.reconnect = { _ in
             // Rebuilds every TURN allocation; the tunnel, fd and WireGuard keys stay.
             MobileReconnect()
         }
@@ -215,6 +221,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             // Keep the tunnel in "reconnecting" state instead of reporting it healthy.
             self?.reasserting = (phase == .recovering || phase == .backingOff)
         }
+        cachedHandshakeAge = -1
         recovery.start()
     }
 
@@ -278,25 +285,33 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             snapshot.txTotal = st.txTotal
             snapshot.rxRate = st.rxRate
             snapshot.txRate = st.txRate
-            // The handshake age needs a device-wide IPC read; it is only meaningful once
-            // at least one stream is up.
-            if st.streams > 0, let ts = MobileTunnelStats() {
-                snapshot.handshakeAge = ts.handshakeAgeSec
-            }
         }
+        // Refreshed every fifth tick: MobileTunnelStats does a device-wide IPC read.
+        snapshot.handshakeAge = cachedHandshakeAge
         return snapshot
+    }
+
+    private func refreshHandshakeAge() {
+        guard let st = MobileGetState(), st.streams > 0, let ts = MobileTunnelStats() else {
+            cachedHandshakeAge = -1
+            return
+        }
+        cachedHandshakeAge = ts.handshakeAgeSec
     }
 
     private func startHealthTimer() {
         healthTimer?.cancel()
         // GCD timer: this callback runs on a queue with no active run loop, so Timer would never fire.
         let t = DispatchSource.makeTimerSource(queue: workQueue)
-        t.schedule(deadline: .now() + 1, repeating: 5)
+        t.schedule(deadline: .now() + 1, repeating: 2)
         t.setEventHandler { [weak self] in
             guard let self = self, self.started else { return }
             self.recovery.tick(self.currentHealth())
             self.memTicks += 1
-            if self.memTicks % 12 == 0 {
+            if self.memTicks % 5 == 0 {
+                self.refreshHandshakeAge()
+            }
+            if self.memTicks % 30 == 0 {
                 SharedLog.write("[MEM] \(MobileMemStats())")
             }
         }

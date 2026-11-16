@@ -30,16 +30,20 @@ provisioning profile и `sendProviderMessage`, поэтому работает �
 не участвует: `UIBackgroundModes`, `BGTaskScheduler` и фоновых сессий нет. Поэтому всё
 восстановление живёт в расширении — `FreeTurnTunnel/RecoveryController.swift`.
 
-- Каждые 5 с снимается здоровье: состояние ядра, `streams/total`, `rx/tx`, возраст
-  WireGuard handshake (`MobileGetState()`, `MobileTunnelStats()`).
-- Триггеры: потоки ниже `total` без прогресса 45 с; `tx > 0` при `rx == 0` 30 с;
-  handshake старше 210 с при наличии трафика; смена физического пути
-  (`NEProvider.defaultPath` + `NWPathMonitor`); `wake()`.
-- Начатое восстановление не прерывается: дедлайн 120 с, продлевается пока растёт число
-  потоков или `rx`. Затем бэкофф 15/30/60/120/300 с с джиттером.
-- Лестница: 3 мягких восстановления (`MobileReconnect` — только TURN-аллокации, туннель и
-  fd остаются), затем 2 жёстких (остановка сессии и старт заново на новом `dup` tun-fd),
-  затем `cancelTunnelWithError` — свежий процесс поднимает on-demand.
+- Здоровье снимается каждые 2 с: `state`, `streams/total`, `rx/tx`; возраст WireGuard
+  handshake — раз в 10 с (`MobileTunnelStats()` — это IPC-чтение всего устройства).
+- Триггеры: 0 потоков — 3 с; потеряна половина и больше — 10 с; один-два потока — 20 с;
+  `tx` без `rx` — 8 с и не меньше 4 КБ отправлено (один медленный запрос не считается);
+  handshake старше 140 с при трафике; смена физического пути (`NEProvider.defaultPath` +
+  `NWPathMonitor`) и `wake()` — сразу.
+- Действия: при частичной деградации — `MobileEnsureStreams()`, то есть перезапуск только
+  залипших потоков (ядро сравнивает их с соседями: поток отправлял, ничего не получил, а
+  другие получают). Полный `MobileReconnect()` — только когда мертвы все потоки, сменилась
+  сеть или сессия «зависла в connecting»; тогда пересобираются все TURN-аллокации, но
+  туннель, fd и ключи WireGuard остаются. Дальше — остановка сессии и старт на новом `dup`
+  tun-fd, в конце `cancelTunnelWithError` и свежий процесс через on-demand.
+- Начатое восстановление не прерывается: дедлайн 75 с, продлевается пока растут потоки или
+  `rx`; бэкофф 5/15/30/60/120 с с джиттером.
 - Капча: восстановление на паузе (ядро само продлевает дедлайн), решение — в приложении
   или по уведомлению.
 - On-demand (`NEOnDemandRuleConnect`) включается вместе с VPN в приложении и Control Center
@@ -47,8 +51,11 @@ provisioning profile и `sendProviderMessage`, поэтому работает �
   остановка из Settings при включённом on-demand снова запустит туннель — выключайте VPN
   через приложение.
 - Логи: одна строка `[RECOVERY] <phase>: <detail>` на смену фазы.
-- Ограничение: per-stream статистики в mobile API нет, поэтому «часть потоков мертва при
-  полном счётчике» ловится только по handshake и `rx`.
+
+Ветка `fix/tunnel-recovery` использует ядро из ветки `fix/stream-recovery`
+(`purkalolka/free-turn-proxy`): `MobileEnsureStreams`, `RestartStream`, `StreamsDetail`.
+При сборке этой ветки передавайте `core_ref=fix/stream-recovery` (вход workflow); после
+merge ядра в `main` верните `core_ref=main`.
 
 ## Приватность логов
 

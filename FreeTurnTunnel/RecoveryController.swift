@@ -2,16 +2,14 @@ import Foundation
 
 /// Keeps a long-running tunnel healthy while the app is not running.
 ///
-/// `MobileReconnect()` cancels whatever relay attempt is in flight, and a full
-/// re-establishment costs the 20 s first-stream barrier plus VK credentials and twelve
-/// DTLS handshakes. The old watchdog retried every 45 s unconditionally, so on a slow
-/// mobile network it killed every attempt before it could converge: the stream count
-/// stayed low, throughput collapsed and, once the session itself died, nothing restarted
-/// it.
+/// The core can now recycle a single dead stream (`MobileEnsureStreams`) instead of
+/// rebuilding the whole relay, so the controller prefers that for partial loss and keeps a
+/// full `MobileReconnect` for signals that mean the entire path is gone (network handover,
+/// black-holed traffic, a stuck connect). A full reconnect costs a credential fetch plus
+/// twelve handshakes; a per-stream restart costs one.
 ///
-/// This controller only reacts to a *sustained lack of progress*, never interrupts an
-/// attempt it has started, backs off between attempts and escalates to a full session
-/// restart when a soft reconnect is not enough.
+/// Recovery is driven by progress, not by a fixed timer: a started attempt is never
+/// interrupted, and only a sustained lack of progress escalates.
 ///
 /// All methods must be called on the provider's serial work queue.
 final class RecoveryController {
@@ -38,38 +36,46 @@ final class RecoveryController {
     }
 
     struct Policy {
-        /// A stream count that does not move for this long is not regular churn: the core
-        /// re-dials a dead stream within seconds, so a full relay restart is only worth it
-        /// once per-stream recovery has clearly given up.
-        var partialGrace: TimeInterval = 45
-        /// We send but nothing comes back: the relay stopped forwarding for us.
-        var blackholeGrace: TimeInterval = 30
+        /// No streams at all while the session claims to be connected.
+        var emptyGrace: TimeInterval = 3
+        /// At least half of the streams are gone.
+        var severeGrace: TimeInterval = 10
+        /// A single stream or two missing; per-stream re-dial may still fix it.
+        var partialGrace: TimeInterval = 20
+        /// Outbound traffic with no inbound reply at all.
+        var blackholeGrace: TimeInterval = 8
+        /// A single request must not look like a black hole: require real volume.
+        var blackholeMinTxBytes: Int64 = 4096
         /// No progress at all for this long means the attempt will not converge.
-        var recoveryDeadline: TimeInterval = 120
+        var recoveryDeadline: TimeInterval = 75
         /// Uninterrupted health that resets the escalation ladder.
         var healthyReset: TimeInterval = 300
         /// A core that neither connects nor errors for this long is stuck.
         var connectingGrace: TimeInterval = 180
-        /// WireGuard drops a silent peer after ~180 s (REJECT_AFTER_TIME).
-        var handshakeStale: Int64 = 210
+        /// WireGuard rekeys under traffic every 120 s; older means the data plane is dead.
+        var handshakeStale: Int64 = 140
         /// After a wake the radio needs a moment before we judge the link.
-        var wakeProbe: TimeInterval = 8
-        /// Backoff before the next escalation, in seconds; the last value repeats.
-        var backoff: [TimeInterval] = [15, 30, 60, 120, 300]
-        var maxSoft = 3
+        var wakeProbe: TimeInterval = 3
+        /// Backoff before the next escalation, seconds; the last value repeats.
+        var backoff: [TimeInterval] = [5, 15, 30, 60, 120]
+        var maxStreams = 2
+        var maxReconnect = 2
         var maxHard = 2
     }
 
     private enum Action: Equatable {
-        case soft
+        case streams
+        case reconnect
         case hard
         case giveUp
     }
 
     var policy = Policy()
 
-    /// Rebuild TURN allocations; the tunnel and the Go session stay alive.
-    var softRecovery: ((String) -> Void)?
+    /// Restart only the stalled streams (cheap, no session or tunnel disruption).
+    var streamRecovery: ((String) -> Void)?
+    /// Rebuild all TURN allocations and DTLS sessions, keeping the tunnel and WireGuard keys.
+    var reconnect: ((String) -> Void)?
     /// Stop the Go session and start it again on a fresh tun fd.
     var hardRecovery: ((String) -> Void)?
     /// Nothing worked: cancel the tunnel and let on-demand start a fresh process.
@@ -84,9 +90,11 @@ final class RecoveryController {
     private var lastStreams = 0
     private var lastRx: Int64 = 0
     private var lastTx: Int64 = 0
-    private var lastState = "idle"
+    private var lastState = "connecting"
     private var streamsChangedAt = Date()
     private var rxChangedAt = Date()
+    /// Bytes sent since the last inbound packet; reset whenever anything is received.
+    private var txSinceRx: Int64 = 0
     private var connectingSince: Date?
     private var healthySince: Date?
     private var recoveringSince: Date?
@@ -94,8 +102,10 @@ final class RecoveryController {
     private var backoffUntil: Date?
     private var pending: Action?
     private var attempts = 0
-    private var softAttempts = 0
+    private var streamAttempts = 0
+    private var reconnectAttempts = 0
     private var hardAttempts = 0
+    private var lastAction: Action = .streams
     private var lastTriggerAt = Date.distantPast
     private var lastDemandAt = Date.distantPast
     private var wakeProbeUntil: Date?
@@ -112,11 +122,12 @@ final class RecoveryController {
         lastStreams = 0
         lastRx = 0
         lastTx = 0
-        // Not "idle": the session is starting, and a soft reconnect must not be promoted to
-        // a full restart just because no tick has run yet.
+        // Not "idle": the session is starting, and a soft action must not be promoted to a
+        // full restart just because no tick has run yet.
         lastState = "connecting"
         streamsChangedAt = startedAt
         rxChangedAt = startedAt
+        txSinceRx = 0
         connectingSince = nil
         healthySince = nil
         recoveringSince = nil
@@ -124,8 +135,10 @@ final class RecoveryController {
         backoffUntil = nil
         pending = nil
         attempts = 0
-        softAttempts = 0
+        streamAttempts = 0
+        reconnectAttempts = 0
         hardAttempts = 0
+        lastAction = .streams
         lastTriggerAt = .distantPast
         lastDemandAt = .distantPast
         wakeProbeUntil = nil
@@ -158,15 +171,13 @@ final class RecoveryController {
         setPhase(phase, "device is going to sleep")
     }
 
-    /// The physical path changed (Wi-Fi <-> cellular): the old TURN sockets are dead.
+    /// The physical path changed (Wi-Fi <-> cellular): every TURN socket is dead.
     func notePathChange(_ key: String) {
         guard running, !isRecovering, phase != .failed else { return }
-        // Only when a working tunnel existed; a handover during the initial connect is
-        // already covered by the "stuck connecting" rule.
         guard lastState == "connected" else { return }
         let now = Date()
-        guard now.timeIntervalSince(lastTriggerAt) > 10 else { return }
-        trigger(.soft, reason: "network path \(key)", now: now)
+        guard now.timeIntervalSince(lastTriggerAt) > 3 else { return }
+        trigger(.reconnect, reason: "network path \(key)", now: now)
     }
 
     /// Explicit request from the app (the "Reconnect" button in the log view).
@@ -174,7 +185,7 @@ final class RecoveryController {
         guard running, !isRecovering, phase != .failed else { return }
         let now = Date()
         lastTriggerAt = now
-        perform(.soft, reason: reason, now: now)
+        perform(.reconnect, reason: reason, now: now)
     }
 
     // MARK: - Main tick
@@ -184,8 +195,8 @@ final class RecoveryController {
         let now = Date()
         let streamsGrew = s.streams > lastStreams
         let rxGrew = s.rxTotal > lastRx
-        let txDelta = s.txTotal - lastTx
-        updateTrackers(s, now)
+        let txDelta = max(0, s.txTotal - lastTx)
+        updateTrackers(s, now, txDelta: txDelta, rxGrew: rxGrew)
         if (streamsGrew || rxGrew) && phase == .recovering {
             lastProgressAt = now
         }
@@ -199,7 +210,7 @@ final class RecoveryController {
             if now < probe { return }
             wakeProbeUntil = nil
             if s.state == "connected", (txDelta > 0 || s.txRate > 0), !rxGrew {
-                trigger(.soft, reason: "no rx after wake", now: now)
+                trigger(.reconnect, reason: "no rx after wake", now: now)
                 return
             }
         }
@@ -231,28 +242,28 @@ final class RecoveryController {
         }
         if s.state == "connecting" {
             if let since = connectingSince, now.timeIntervalSince(since) > policy.connectingGrace {
-                trigger(.soft, reason: "stuck connecting \(Int(now.timeIntervalSince(since)))s", now: now)
+                trigger(.reconnect, reason: "stuck connecting \(Int(now.timeIntervalSince(since)))s", now: now)
             }
             return
         }
 
-        let converged = s.total > 0 && s.streams >= s.total
-        // "Demand" is any traffic leaving the device in the last minute: idle is not a stall.
         let demand = txDelta > 0 || s.txRate > 0 || now.timeIntervalSince(lastDemandAt) < 60
 
-        // Traffic leaves the device but nothing comes back: the relay black-holes us.
-        if demand {
+        // Outbound traffic with no inbound reply: the whole path is black-holed, a
+        // per-stream restart cannot help.
+        if txSinceRx >= policy.blackholeMinTxBytes {
             let quiet = now.timeIntervalSince(rxChangedAt)
             if quiet >= policy.blackholeGrace {
-                trigger(.soft, reason: "tx without rx for \(Int(quiet))s", now: now)
+                trigger(.reconnect, reason: "tx \(txSinceRx)B without rx for \(Int(quiet))s", now: now)
                 return
             }
         }
 
+        let converged = s.total > 0 && s.streams >= s.total
         if converged {
             let handshakeStale = s.handshakeAge >= 0 && s.handshakeAge > policy.handshakeStale
             if handshakeStale && demand {
-                trigger(.soft, reason: "handshake age \(s.handshakeAge)s with traffic", now: now)
+                trigger(.reconnect, reason: "handshake age \(s.handshakeAge)s with traffic", now: now)
                 return
             }
             let healthyFrom = healthySince ?? now
@@ -260,45 +271,63 @@ final class RecoveryController {
             if now.timeIntervalSince(healthyFrom) >= policy.healthyReset {
                 resetLadder()
             }
-            // Detail is deliberately stable: the phase callback logs every change, and a
-            // handshake age in the string would emit a line on every tick.
+            // Detail is deliberately stable: it is logged on phase changes only.
             setPhase(.healthy, "streams \(s.streams)/\(s.total)")
             return
         }
 
         healthySince = nil
         let stalled = now.timeIntervalSince(streamsChangedAt)
-        if stalled >= policy.partialGrace {
-            trigger(.soft, reason: "streams \(s.streams)/\(s.total) stalled \(Int(stalled))s", now: now)
+        let grace: TimeInterval
+        if s.streams == 0 {
+            grace = policy.emptyGrace
+        } else if s.streams * 2 <= s.total {
+            grace = policy.severeGrace
+        } else {
+            grace = policy.partialGrace
+        }
+        if stalled >= grace {
+            trigger(.streams, reason: "streams \(s.streams)/\(s.total) stalled \(Int(stalled))s", now: now)
         }
     }
 
     // MARK: - Decision making
 
-    private func trigger(_ action: Action, reason: String, now: Date) {
+    private func trigger(_ preferred: Action, reason: String, now: Date) {
         guard running, !isRecovering, phase != .failed else { return }
         // The same bad tick must not produce two recoveries.
-        guard now.timeIntervalSince(lastTriggerAt) > 5 else { return }
+        guard now.timeIntervalSince(lastTriggerAt) > 2 else { return }
+        var action = preferred
+        // A per-stream restart cannot revive a session that is gone, and cannot help while
+        // the first connect has not produced a stream yet.
+        if lastState == "error" || lastState == "idle" {
+            action = .hard
+        } else if lastState == "connecting", action == .streams {
+            action = .reconnect
+        }
+        if action == .streams, streamAttempts >= policy.maxStreams {
+            action = .reconnect
+        }
         lastTriggerAt = now
         perform(action, reason: reason, now: now)
     }
 
     private func perform(_ action: Action, reason: String, now: Date) {
-        // A relay reconnect cannot revive a session that is no longer running.
-        var action = action
-        if action == .soft, lastState == "error" || lastState == "idle" {
-            action = .hard
-        }
         switch action {
-        case .soft:
-            softAttempts += 1
+        case .streams:
+            streamAttempts += 1
             attempts += 1
-            beginRecovery(label: "soft", reason: reason, now: now)
-            softRecovery?(reason)
+            beginRecovery(action: .streams, label: "streams", reason: reason, now: now)
+            streamRecovery?(reason)
+        case .reconnect:
+            reconnectAttempts += 1
+            attempts += 1
+            beginRecovery(action: .reconnect, label: "reconnect", reason: reason, now: now)
+            reconnect?(reason)
         case .hard:
             hardAttempts += 1
             attempts += 1
-            beginRecovery(label: "hard", reason: reason, now: now)
+            beginRecovery(action: .hard, label: "hard", reason: reason, now: now)
             hardRecovery?(reason)
         case .giveUp:
             pending = nil
@@ -307,12 +336,14 @@ final class RecoveryController {
         }
     }
 
-    private func beginRecovery(label: String, reason: String, now: Date) {
+    private func beginRecovery(action: Action, label: String, reason: String, now: Date) {
+        lastAction = action
         recoveringSince = now
         lastProgressAt = now
         // Fresh windows: the previous stall must not be counted against the new attempt.
         streamsChangedAt = now
         rxChangedAt = now
+        txSinceRx = 0
         setPhase(.recovering, "\(label): \(reason)")
     }
 
@@ -324,7 +355,7 @@ final class RecoveryController {
         if s.total > 0 && s.streams >= s.total {
             // Give the core a moment to drop the old allocations first, otherwise a
             // reconnect that has not started yet looks like an immediate success.
-            guard now.timeIntervalSince(since) > 20 else { return }
+            guard now.timeIntervalSince(since) > 10 else { return }
             recoveringSince = nil
             healthySince = now
             resetLadder()
@@ -339,11 +370,13 @@ final class RecoveryController {
 
     private func escalate(_ now: Date) {
         let action: Action
-        if softAttempts < policy.maxSoft {
-            action = .soft
-        } else if hardAttempts < policy.maxHard {
-            action = .hard
-        } else {
+        switch lastAction {
+        case .streams:
+            action = reconnectAttempts < policy.maxReconnect ? .reconnect
+                : (hardAttempts < policy.maxHard ? .hard : .giveUp)
+        case .reconnect, .hard:
+            action = hardAttempts < policy.maxHard ? .hard : .giveUp
+        case .giveUp:
             action = .giveUp
         }
         pending = action
@@ -361,7 +394,8 @@ final class RecoveryController {
 
     private func resetLadder() {
         attempts = 0
-        softAttempts = 0
+        streamAttempts = 0
+        reconnectAttempts = 0
         hardAttempts = 0
         pending = nil
         backoffUntil = nil
@@ -369,14 +403,18 @@ final class RecoveryController {
 
     // MARK: - Bookkeeping
 
-    private func updateTrackers(_ s: Snapshot, _ now: Date) {
+    private func updateTrackers(_ s: Snapshot, _ now: Date, txDelta: Int64, rxGrew: Bool) {
         if s.streams != lastStreams {
             lastStreams = s.streams
             streamsChangedAt = now
         }
-        if s.rxTotal != lastRx {
+        if rxGrew {
             lastRx = s.rxTotal
             rxChangedAt = now
+            txSinceRx = 0
+        } else {
+            lastRx = s.rxTotal
+            txSinceRx += txDelta
         }
         if s.txTotal != lastTx {
             lastDemandAt = now
