@@ -8,9 +8,29 @@ import WidgetKit
 /// System VPN entry point. The Go core (Mobile.xcframework) runs WireGuard/AmneziaWG
 /// entirely in-process, talking to the TURN relay through an in-memory pipe — there is
 /// no local loopback socket to exclude from the tunnel, unlike a separate relay process.
+///
+/// The extension owns recovery: the app is suspended almost immediately after it leaves
+/// the foreground, so nothing outside this process can notice a dead relay or a stale
+/// session (see `RecoveryController`).
 class PacketTunnelProvider: NEPacketTunnelProvider {
 
     private var started = false
+    /// Raw provider tun descriptor. The core gets a `dup()` of it, so stopping the
+    /// session does not invalidate the descriptor a restart needs.
+    private var rawTunFD: Int32?
+    private var configJSON = ""
+    private var memTicks = 0
+
+    private let control = ControlServer()
+    private let recovery = RecoveryController()
+    private let workQueue = DispatchQueue(label: "freeturn.work")
+    /// `MobileStop()` can block for seconds; keep it off the health/timer queue.
+    private let recoveryQueue = DispatchQueue(label: "freeturn.recovery")
+    private var healthTimer: DispatchSourceTimer?
+    private var pathMonitor: NWPathMonitor?
+    private var pathObservation: NSKeyValueObservation?
+    private var lastPathKey: String?
+    private var eventSink: TunnelEventSink?
 
     override func startTunnel(options: [String: NSObject]?, completionHandler: @escaping (Error?) -> Void) {
         let conf = (protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration ?? [:]
@@ -23,6 +43,22 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
            }) {
             SharedLog.groupOverride = g
         }
+        // The system can call startTunnel again for a tunnel it considers alive. Reuse the
+        // running Go session for the same config; otherwise the old timers leak and
+        // MobileStartTunnel fails with "already running".
+        guard let configJSON = conf["configJSON"] as? String,
+              let wgText = conf["wgText"] as? String,
+              let mtu = conf["mtu"] as? Int else {
+            SharedLog.write("[EXT] ERROR missing provider configuration")
+            completionHandler(NSError(domain: "FreeTurn", code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "missing provider configuration"]))
+            return
+        }
+        let sameConfig = started && configJSON == self.configJSON
+        if started && !sameConfig {
+            SharedLog.write("[EXT] startTunnel re-entered with a new config, restarting session")
+            teardownRuntime()
+        }
         // The loopback control channel is the primary app<->extension transport: unlike App
         // Groups and sendProviderMessage it survives a third-party signer that gives the
         // extension a different (or no) embedded provisioning profile.
@@ -31,8 +67,10 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             controlServer?.appendLog(line, offset: offset)
         }
         SharedLog.onClear = { [weak controlServer] in controlServer?.broadcastClear() }
-        control.onReconnect = { [weak self] in self?.reconnect(reason: "app request") }
-        control.onWake = { [weak self] in self?.reconnect(reason: "wake") }
+        control.onReconnect = { [weak self] in self?.requestRecovery(reason: "app request") }
+        control.onWake = { [weak self] in
+            self?.workQueue.async { self?.recovery.noteWake() }
+        }
         control.start(token: conf["controlToken"] as? String
             ?? conf["beaconToken"] as? String
             ?? "")
@@ -40,12 +78,12 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         SharedLog.captchaURL = nil
         MobileTuneForExtension()
         SharedLog.write("[EXT] startTunnel called, build \(Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?"), group \(SharedLog.groupID)")
-        guard let configJSON = conf["configJSON"] as? String,
-              let wgText = conf["wgText"] as? String,
-              let mtu = conf["mtu"] as? Int else {
-            SharedLog.write("[EXT] ERROR missing provider configuration")
-            completionHandler(NSError(domain: "FreeTurn", code: 1,
-                userInfo: [NSLocalizedDescriptionKey: "missing provider configuration"]))
+        self.configJSON = configJSON
+        if sameConfig {
+            SharedLog.write("[EXT] startTunnel re-entered, reusing the running session")
+            startHealthTimer()
+            startPathWatch()
+            completionHandler(nil)
             return
         }
         SharedLog.write("[EXT] config loaded, mtu=\(mtu)")
@@ -110,13 +148,19 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             SharedLog.write("[EXT] network settings applied")
             guard let self = self else { return }
 
-            guard let fd = self.getTunnelFileDescriptor() else {
+            guard let raw = self.getTunnelFileDescriptor() else {
                 SharedLog.write("[EXT] ERROR could not find tun fd")
                 completionHandler(NSError(domain: "FreeTurn", code: 4,
                     userInfo: [NSLocalizedDescriptionKey: "could not find tun file descriptor"]))
                 return
             }
-            SharedLog.write("[EXT] found tun fd=\(fd)")
+            self.rawTunFD = raw
+            SharedLog.write("[EXT] found tun fd=\(raw)")
+            guard let goFD = self.duplicateTunFD() else {
+                completionHandler(NSError(domain: "FreeTurn", code: 5,
+                    userInfo: [NSLocalizedDescriptionKey: "could not duplicate tun file descriptor"]))
+                return
+            }
 
             let sink = TunnelEventSink()
             MobileSetEventSink(sink)
@@ -124,7 +168,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
             SharedLog.write("[EXT] calling MobileStartTunnel...")
             var startErr: NSError?
-            MobileStartTunnel(configJSON, Int(fd), &startErr)
+            MobileStartTunnel(configJSON, Int(goFD), &startErr)
             if let startErr = startErr {
                 SharedLog.write("[EXT] ERROR MobileStartTunnel: \(startErr.localizedDescription)")
                 completionHandler(startErr)
@@ -133,94 +177,185 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             SharedLog.write("[EXT] MobileStartTunnel returned OK")
 
             self.started = true
+            self.startRecovery()
             if #available(iOS 18.0, *) { ControlCenter.shared.reloadControls(ofKind: "FreeTurnToggle") }
-            // GCD timer: this callback runs on a queue with no active run loop, so Timer would never fire.
-            let t = DispatchSource.makeTimerSource(queue: self.workQueue)
-            t.schedule(deadline: .now() + 2, repeating: 10)
-            t.setEventHandler { [weak self] in
-                SharedLog.write("[MEM] \(MobileMemStats())")
-                self?.watchStreams()
-            }
-            t.resume()
-            self.memTimer = t
-            self.startPathMonitor()
+            self.startHealthTimer()
+            self.startPathWatch()
             completionHandler(nil)
         }
     }
 
     override func stopTunnel(with reason: NEProviderStopReason, completionHandler: @escaping () -> Void) {
         SharedLog.write("[EXT] stopTunnel reason=\(reason.rawValue)")
-        control.stop()
-        SharedLog.onWrite = nil
-        SharedLog.onClear = nil
-        memTimer?.cancel()
-        memTimer = nil
-        pathMonitor?.cancel()
-        pathMonitor = nil
-        if started {
-            MobileStop()
-            started = false
-        }
+        teardownRuntime()
         completionHandler()
     }
 
-    private var eventSink: TunnelEventSink?
-    private let control = ControlServer()
-    private var memTimer: DispatchSourceTimer?
-    private var pathMonitor: NWPathMonitor?
-    private let workQueue = DispatchQueue(label: "freeturn.work")
-    private var lastPathKey: String?
-    private var degradedSince: Date?
-    private var lastReconnect = Date.distantPast
+    override func sleep(completionHandler: @escaping () -> Void) {
+        workQueue.async { [weak self] in self?.recovery.noteSleep() }
+        completionHandler()
+    }
 
     override func wake() {
-        SharedLog.write("[EXT] wake - refreshing TURN allocations")
-        reconnect(reason: "wake")
+        SharedLog.write("[EXT] wake")
+        workQueue.async { [weak self] in self?.recovery.noteWake() }
     }
 
-    /// Mirrors the Android client's NetworkHandoverMonitor: after Wi-Fi/cellular switches
-    /// the old TURN sockets are dead, but the Go core cannot see the network change itself.
-    private func startPathMonitor() {
-        // .other excludes our own utun interface.
-        let m = NWPathMonitor(prohibitedInterfaceTypes: [.other])
-        m.pathUpdateHandler = { [weak self] path in
-            guard let self = self else { return }
-            let key = path.status == .satisfied
-                ? path.availableInterfaces.map { $0.name }.sorted().joined(separator: ",")
-                : "none"
-            defer { self.lastPathKey = key }
-            guard let prev = self.lastPathKey, prev != key, key != "none" else { return }
-            SharedLog.write("[EXT] network changed \(prev) -> \(key)")
-            self.reconnect(reason: "network change")
+    // MARK: - Recovery
+
+    private func startRecovery() {
+        recovery.softRecovery = { _ in
+            // Rebuilds every TURN allocation; the tunnel, fd and WireGuard keys stay.
+            MobileReconnect()
         }
-        m.start(queue: workQueue)
-        pathMonitor = m
+        recovery.hardRecovery = { [weak self] reason in self?.restartSession(reason: reason) }
+        recovery.giveUp = { [weak self] reason in self?.cancelAfterFailure(reason: reason) }
+        recovery.phaseChanged = { [weak self] phase, detail in
+            SharedLog.write("[RECOVERY] \(phase.rawValue): \(detail)")
+            // Keep the tunnel in "reconnecting" state instead of reporting it healthy.
+            self?.reasserting = (phase == .recovering || phase == .backingOff)
+        }
+        recovery.start()
     }
 
-    /// Streams that stay below the target for a while are not coming back by themselves.
-    private func watchStreams() {
-        guard let st = MobileGetState(), st.total > 0, st.state == "connected" || st.state == "connecting" else {
-            degradedSince = nil
+    private func requestRecovery(reason: String) {
+        workQueue.async { [weak self] in
+            guard let self = self, self.started else { return }
+            self.recovery.requestSoftRecovery(reason)
+        }
+    }
+
+    /// A soft reconnect is not enough when the Go session itself ended: stop it and start
+    /// it again on a fresh duplicate of the provider descriptor.
+    private func restartSession(reason: String) {
+        SharedLog.write("[RECOVERY] hard restart: \(reason)")
+        recoveryQueue.async { [weak self] in
+            guard let self = self, self.started else { return }
+            MobileStop()
+            guard let fd = self.duplicateTunFD() else { return }
+            var err: NSError?
+            MobileStartTunnel(self.configJSON, Int(fd), &err)
+            if let err = err {
+                SharedLog.write("[RECOVERY] hard restart failed: \(err.localizedDescription)")
+            } else {
+                SharedLog.write("[RECOVERY] hard restart ok")
+            }
+        }
+    }
+
+    private func cancelAfterFailure(reason: String) {
+        SharedLog.write("[RECOVERY] cancelling tunnel: \(reason)")
+        recoveryQueue.async { [weak self] in
+            guard let self = self else { return }
+            MobileStop()
+            // Documented way for a provider to stop an unrecoverable tunnel; on-demand
+            // then starts a fresh process with a fresh Go runtime.
+            self.cancelTunnelWithError(NSError(domain: "FreeTurn", code: 7,
+                userInfo: [NSLocalizedDescriptionKey: "tunnel recovery failed"]))
+        }
+    }
+
+    private func duplicateTunFD() -> Int32? {
+        guard let raw = rawTunFD else {
+            SharedLog.write("[EXT] ERROR no raw tun fd to duplicate")
+            return nil
+        }
+        let fd = dup(raw)
+        if fd < 0 {
+            SharedLog.write("[EXT] ERROR dup(tun fd): errno=\(errno)")
+            return nil
+        }
+        return fd
+    }
+
+    private func currentHealth() -> RecoveryController.Snapshot {
+        var snapshot = RecoveryController.Snapshot()
+        if let st = MobileGetState() {
+            snapshot.state = st.state
+            snapshot.streams = st.streams
+            snapshot.total = st.total
+            snapshot.rxTotal = st.rxTotal
+            snapshot.txTotal = st.txTotal
+            snapshot.rxRate = st.rxRate
+            snapshot.txRate = st.txRate
+            // The handshake age needs a device-wide IPC read; it is only meaningful once
+            // at least one stream is up.
+            if st.streams > 0, let ts = MobileTunnelStats() {
+                snapshot.handshakeAge = ts.handshakeAgeSec
+            }
+        }
+        return snapshot
+    }
+
+    private func startHealthTimer() {
+        healthTimer?.cancel()
+        // GCD timer: this callback runs on a queue with no active run loop, so Timer would never fire.
+        let t = DispatchSource.makeTimerSource(queue: workQueue)
+        t.schedule(deadline: .now() + 1, repeating: 5)
+        t.setEventHandler { [weak self] in
+            guard let self = self, self.started else { return }
+            self.recovery.tick(self.currentHealth())
+            self.memTicks += 1
+            if self.memTicks % 12 == 0 {
+                SharedLog.write("[MEM] \(MobileMemStats())")
+            }
+        }
+        t.resume()
+        healthTimer = t
+    }
+
+    // MARK: - Network path
+
+    /// `defaultPath` is the physical path used by the provider's own sockets: the tunnel's
+    /// utun is not part of it, so it is the reliable Wi-Fi <-> cellular handover signal.
+    /// `NWPathMonitor` is kept as a secondary source (and the documented replacement on
+    /// iOS 18+); the controller de-duplicates the two.
+    private func startPathWatch() {
+        pathObservation?.invalidate()
+        pathMonitor?.cancel()
+        pathObservation = observe(\.defaultPath, options: [.initial, .new]) { [weak self] _, change in
+            guard let self = self, let path = change.newValue ?? nil else { return }
+            let key = PacketTunnelProvider.pathKey(path)
+            self.workQueue.async { self.handlePath(key) }
+        }
+        let monitor = NWPathMonitor()
+        monitor.pathUpdateHandler = { [weak self] path in
+            guard let self = self else { return }
+            let key = PacketTunnelProvider.pathKey(path)
+            self.workQueue.async { self.handlePath(key) }
+        }
+        monitor.start(queue: workQueue)
+        pathMonitor = monitor
+    }
+
+    private static func pathKey(_ path: NWPath) -> String {
+        guard path.status == .satisfied else { return "none" }
+        let names = path.availableInterfaces
+            .filter { $0.type == .wifi || $0.type == .cellular || $0.type == .wiredEthernet }
+            .map { $0.name }
+            .sorted()
+        return names.isEmpty ? "other" : names.joined(separator: ",")
+    }
+
+    private func handlePath(_ key: String) {
+        guard started else { return }
+        guard let previous = lastPathKey else {
+            lastPathKey = key
             return
         }
-        if st.streams >= st.total { degradedSince = nil; return }
-        let since = degradedSince ?? Date()
-        degradedSince = since
-        if Date().timeIntervalSince(since) > 45 {
-            degradedSince = nil
-            SharedLog.write("[EXT] streams \(st.streams)/\(st.total) for 45s - reconnecting")
-            reconnect(reason: "watchdog")
+        guard previous != key, key != "none" else {
+            lastPathKey = key
+            return
         }
+        lastPathKey = key
+        // "none" (no network) and "other" (the monitor only sees our own utun) are not
+        // handover signals.
+        guard key != "none", key != "other" else { return }
+        SharedLog.write("[EXT] network path \(previous) -> \(key)")
+        recovery.notePathChange(key)
     }
 
-    private func reconnect(reason: String) {
-        workQueue.async {
-            guard self.started, Date().timeIntervalSince(self.lastReconnect) > 15 else { return }
-            self.lastReconnect = Date()
-            SharedLog.write("[EXT] reconnect (\(reason))")
-            if reason == "wake" { MobileWake() } else { MobileReconnect() }
-        }
-    }
+    // MARK: - App messages
 
     override func handleAppMessage(_ messageData: Data, completionHandler: ((Data?) -> Void)?) {
         var info = SharedLog.snapshot()
@@ -236,6 +371,26 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             data = try? JSONSerialization.data(withJSONObject: ["build": info["build"] ?? "?", "error": "log not encodable"])
         }
         completionHandler?(data)
+    }
+
+    // MARK: - Teardown
+
+    private func teardownRuntime() {
+        healthTimer?.cancel()
+        healthTimer = nil
+        pathMonitor?.cancel()
+        pathMonitor = nil
+        pathObservation?.invalidate()
+        pathObservation = nil
+        lastPathKey = nil
+        recovery.stop()
+        control.stop()
+        SharedLog.onWrite = nil
+        SharedLog.onClear = nil
+        if started {
+            MobileStop()
+            started = false
+        }
     }
 
     /// Extracts the raw file descriptor backing this extension's utun interface.
@@ -292,7 +447,9 @@ private final class TunnelEventSink: NSObject, MobileEventSinkProtocol {
         SharedLog.write("[\((level ?? "log").uppercased())] \(msg ?? "")")
     }
     func onCaptcha(_ url: String?) {
-        SharedLog.write("[CAPTCHA] \(url ?? "(cleared)")")
+        // The URL carries a one-time captcha handle: keep it out of the log, the app gets
+        // it over the control channel and the system notification.
+        SharedLog.write("[CAPTCHA] " + (url == nil || url?.isEmpty == true ? "cleared" : "required"))
         SharedLog.captchaURL = url
         guard let url = url, !url.isEmpty, url != lastNotified else {
             if url == nil || url?.isEmpty == true { lastNotified = nil }
