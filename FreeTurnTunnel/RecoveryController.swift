@@ -255,8 +255,9 @@ final class RecoveryController {
                 trigger(.soft, reason: "handshake age \(s.handshakeAge)s with traffic", now: now)
                 return
             }
-            healthySince = healthySince ?? now
-            if now.timeIntervalSince(healthySince) >= policy.healthyReset {
+            let healthyFrom = healthySince ?? now
+            healthySince = healthyFrom
+            if now.timeIntervalSince(healthyFrom) >= policy.healthyReset {
                 resetLadder()
             }
             // Detail is deliberately stable: the phase callback logs every change, and a

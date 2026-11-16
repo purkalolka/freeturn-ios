@@ -28,7 +28,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     private let recoveryQueue = DispatchQueue(label: "freeturn.recovery")
     private var healthTimer: DispatchSourceTimer?
     private var pathMonitor: NWPathMonitor?
-    private var pathObservation: NSKeyValueObservation?
+    private var observingDefaultPath = false
     private var lastPathKey: String?
     private var eventSink: TunnelEventSink?
 
@@ -311,12 +311,13 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     /// `NWPathMonitor` is kept as a secondary source (and the documented replacement on
     /// iOS 18+); the controller de-duplicates the two.
     private func startPathWatch() {
-        pathObservation?.invalidate()
         pathMonitor?.cancel()
-        pathObservation = observe(\.defaultPath, options: [.initial, .new]) { [weak self] _, change in
-            guard let self = self, let path = change.newValue ?? nil else { return }
-            let key = PacketTunnelProvider.pathKey(path)
-            self.workQueue.async { self.handlePath(key) }
+        if !observingDefaultPath {
+            // `defaultPath` is KVO-compliant and reports the physical path of the
+            // provider's own sockets; the tunnel's utun is not part of it.
+            addObserver(self, forKeyPath: "defaultPath",
+                        options: [.initial, .new], context: Self.defaultPathContext)
+            observingDefaultPath = true
         }
         let monitor = NWPathMonitor()
         monitor.pathUpdateHandler = { [weak self] path in
@@ -328,12 +329,29 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         pathMonitor = monitor
     }
 
-    private static func pathKey(_ path: NWPath) -> String {
+    private static let defaultPathContext = UnsafeMutableRawPointer(bitPattern: 0x46545054)!
+
+    override func observeValue(forKeyPath keyPath: String?, of object: Any?,
+                               change: [NSKeyValueChangeKey: Any]?,
+                               context: UnsafeMutableRawPointer?) {
+        guard context == Self.defaultPathContext,
+              let path = change?[.newKey] as? Network.NWPath else { return }
+        let key = Self.pathKey(path)
+        workQueue.async { [weak self] in self?.handlePath(key) }
+    }
+
+    private static func pathKey(_ path: Network.NWPath) -> String {
         guard path.status == .satisfied else { return "none" }
-        let names = path.availableInterfaces
-            .filter { $0.type == .wifi || $0.type == .cellular || $0.type == .wiredEthernet }
-            .map { $0.name }
-            .sorted()
+        var names: [String] = []
+        for interface in path.availableInterfaces {
+            switch interface.type {
+            case .wifi, .cellular, .wiredEthernet:
+                names.append(interface.name)
+            default:
+                break
+            }
+        }
+        names.sort()
         return names.isEmpty ? "other" : names.joined(separator: ",")
     }
 
@@ -380,8 +398,10 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         healthTimer = nil
         pathMonitor?.cancel()
         pathMonitor = nil
-        pathObservation?.invalidate()
-        pathObservation = nil
+        if observingDefaultPath {
+            removeObserver(self, forKeyPath: "defaultPath", context: Self.defaultPathContext)
+            observingDefaultPath = false
+        }
         lastPathKey = nil
         recovery.stop()
         control.stop()
