@@ -86,9 +86,12 @@ enum SharedLog {
     private static let queue = DispatchQueue(label: "sharedlog")
 
     static func write(_ line: String) {
+        // Run the redaction before anything leaves this process: the same line goes to the
+        // log file in the App Group and to the app over the control channel.
+        let safe = Redactor.redact(line)
         queue.async {
             let ts = ISO8601DateFormatter().string(from: Date())
-            let entry = "\(ts) \(line)\n"
+            let entry = "\(ts) \(safe)\n"
             let offset = totalWritten
             totalWritten += entry.utf8.count
             memory += entry
