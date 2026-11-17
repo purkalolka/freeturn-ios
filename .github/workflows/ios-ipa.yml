@@ -16,6 +16,10 @@ on:
         description: "Publish as pre-release (not marked Latest)"
         type: boolean
         default: false
+      publish:
+        description: "Publish a GitHub release (the IPA artifact is uploaded either way)"
+        type: boolean
+        default: false
       notes:
         description: "Release notes (empty = standard text)"
         default: ""
@@ -86,6 +90,7 @@ jobs:
           retention-days: 14
 
       - name: Publish release
+        if: github.ref_type == 'tag' || inputs.publish
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_type == 'tag' && github.ref_name || inputs.tag || format('build-{0}', github.run_number) }}
@@ -104,5 +109,5 @@ jobs:
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" build/FreeTurn-unsigned.ipa --clobber
           else
-            gh release create "$TAG" build/FreeTurn-unsigned.ipa --title "FreeTurn $TAG" --notes-file "$RUNNER_TEMP/notes.md" "${FLAGS[@]}"
+            gh release create "$TAG" build/FreeTurn-unsigned.ipa --target "$GITHUB_SHA" --title "FreeTurn $TAG" --notes-file "$RUNNER_TEMP/notes.md" "${FLAGS[@]}"
           fi
