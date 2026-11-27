@@ -361,7 +361,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                         options: [.initial, .new], context: Self.defaultPathContext)
             observingDefaultPath = true
         }
-        let monitor = NWPathMonitor()
+        let monitor = NWPathMonitor(prohibitedInterfaceTypes: [.other])
         monitor.pathUpdateHandler = { [weak self] path in
             guard let self = self else { return }
             self.workQueue.async {
@@ -378,9 +378,10 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     override func observeValue(forKeyPath keyPath: String?, of object: Any?,
                                change: [NSKeyValueChangeKey: Any]?,
                                context: UnsafeMutableRawPointer?) {
-        guard context == Self.defaultPathContext,
-              let path = change?[.newKey] as? Network.NWPath else { return }
-        workQueue.async { [weak self] in self?.observePhysicalPath(path) }
+        guard context == Self.defaultPathContext else { return }
+        // NEProvider.defaultPath uses the legacy NetworkExtension.NWPath class. Its
+        // changes prompt us to re-sample the Network framework monitor path.
+        workQueue.async { [weak self] in self?.observePhysicalPath() }
     }
 
     private static func pathKey(_ path: Network.NWPath) -> String {
@@ -391,11 +392,9 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         return "other"
     }
 
-    private func observePhysicalPath(_ observedPath: Network.NWPath? = nil) {
+    private func observePhysicalPath() {
         guard started else { return }
-        // defaultPath belongs to the extension's own sockets. The monitor is a fallback
-        // until that path is available, but never overrides a known provider path.
-        guard let path = defaultPath ?? observedPath ?? latestMonitorPath else { return }
+        guard let path = latestMonitorPath else { return }
         let key = Self.pathKey(path)
         guard key != "none", key != "other" else { return }
         if lastPathKey == nil || Date() < pathWarmupUntil {
@@ -416,7 +415,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         let check = DispatchWorkItem { [weak self] in
             guard let self = self, self.started else { return }
             self.pendingPathCheck = nil
-            guard let settledPath = self.defaultPath ?? self.latestMonitorPath else { return }
+            guard let settledPath = self.latestMonitorPath else { return }
             let settled = Self.pathKey(settledPath)
             guard settled != "none", settled != "other",
                   let previous = self.lastPathKey, previous != settled else { return }
