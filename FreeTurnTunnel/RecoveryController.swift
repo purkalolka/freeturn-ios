@@ -29,6 +29,7 @@ final class RecoveryController {
     enum Phase: String {
         case idle
         case healthy
+        case waiting
         case recovering
         case backingOff
         case captcha
@@ -54,8 +55,6 @@ final class RecoveryController {
         var connectingGrace: TimeInterval = 180
         /// WireGuard rekeys under traffic every 120 s; older means the data plane is dead.
         var handshakeStale: Int64 = 140
-        /// After a wake the radio needs a moment before we judge the link.
-        var wakeProbe: TimeInterval = 3
         /// Backoff before the next escalation, seconds; the last value repeats.
         var backoff: [TimeInterval] = [5, 15, 30, 60, 120]
         var maxStreams = 2
@@ -73,7 +72,7 @@ final class RecoveryController {
     var policy = Policy()
 
     /// Restart only the stalled streams (cheap, no session or tunnel disruption).
-    var streamRecovery: ((String) -> Void)?
+    var streamRecovery: ((String) -> Int)?
     /// Rebuild all TURN allocations and DTLS sessions, keeping the tunnel and WireGuard keys.
     var reconnect: ((String) -> Void)?
     /// Stop the Go session and start it again on a fresh tun fd.
@@ -108,7 +107,6 @@ final class RecoveryController {
     private var lastAction: Action = .streams
     private var lastTriggerAt = Date.distantPast
     private var lastDemandAt = Date.distantPast
-    private var wakeProbeUntil: Date?
     private var lastDetail = ""
 
     var isRecovering: Bool { phase == .recovering || phase == .backingOff }
@@ -141,7 +139,6 @@ final class RecoveryController {
         lastAction = .streams
         lastTriggerAt = .distantPast
         lastDemandAt = .distantPast
-        wakeProbeUntil = nil
         lastDetail = ""
     }
 
@@ -150,16 +147,18 @@ final class RecoveryController {
         phase = .idle
         pending = nil
         backoffUntil = nil
-        wakeProbeUntil = nil
     }
 
     // MARK: - External events
 
-    /// The device woke up: the radio may be attached to a different network now.
+    /// Ignore the sleep interval when measuring a stalled stream or a black hole.
+    /// The Go core separately probes TURN liveness after a long sleep.
     func noteWake() {
-        guard running, !isRecovering, phase != .failed else { return }
-        wakeProbeUntil = Date().addingTimeInterval(policy.wakeProbe)
-        setPhase(phase, "device woke up")
+        guard running else { return }
+        let now = Date()
+        streamsChangedAt = now
+        rxChangedAt = now
+        txSinceRx = 0
     }
 
     /// Going to sleep freezes every timer, so the gap afterwards is not a stall.
@@ -174,7 +173,7 @@ final class RecoveryController {
     /// The physical path changed (Wi-Fi <-> cellular): every TURN socket is dead.
     func notePathChange(_ key: String) {
         guard running, !isRecovering, phase != .failed else { return }
-        guard lastState == "connected" else { return }
+        guard lastState == "connected" || (lastState == "connecting" && lastStreams > 0) else { return }
         let now = Date()
         guard now.timeIntervalSince(lastTriggerAt) > 3 else { return }
         trigger(.reconnect, reason: "network path \(key)", now: now)
@@ -206,15 +205,6 @@ final class RecoveryController {
             return
         }
 
-        if let probe = wakeProbeUntil {
-            if now < probe { return }
-            wakeProbeUntil = nil
-            if s.state == "connected", (txDelta > 0 || s.txRate > 0), !rxGrew {
-                trigger(.reconnect, reason: "no rx after wake", now: now)
-                return
-            }
-        }
-
         switch phase {
         case .recovering:
             checkRecovery(s, now)
@@ -226,7 +216,7 @@ final class RecoveryController {
             return
         case .failed:
             return
-        case .idle, .healthy, .captcha:
+        case .idle, .healthy, .waiting, .captcha:
             break
         }
 
@@ -317,8 +307,16 @@ final class RecoveryController {
         case .streams:
             streamAttempts += 1
             attempts += 1
+            let restarted = streamRecovery?(reason) ?? 0
+            if restarted == 0 {
+                // A down stream is already being redialed by the core. EnsureStreams
+                // only restarts still-up streams with stale RX; waiting in .recovering
+                // for 75 seconds here would claim progress for an action that did nothing.
+                streamsChangedAt = now
+                setPhase(.waiting, "core redial pending; no stalled allocation to recycle")
+                return
+            }
             beginRecovery(action: .streams, label: "streams", reason: reason, now: now)
-            streamRecovery?(reason)
         case .reconnect:
             reconnectAttempts += 1
             attempts += 1

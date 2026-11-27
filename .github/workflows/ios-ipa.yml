@@ -5,7 +5,7 @@ on:
     inputs:
       core_ref:
         description: "Ref of purkalolka/free-turn-proxy to build the core from"
-        default: main
+        default: 806e40f6eca9bd8d8fcbe4587c78f1686e8bdf68
       tag:
         description: "Release tag (default: build-<run number>)"
         default: ""
@@ -38,7 +38,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: purkalolka/free-turn-proxy
-          ref: ${{ inputs.core_ref || 'main' }}
+          ref: ${{ inputs.core_ref || '806e40f6eca9bd8d8fcbe4587c78f1686e8bdf68' }}
           path: core
 
       - uses: actions/setup-go@v5

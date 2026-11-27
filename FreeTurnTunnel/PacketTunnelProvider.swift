@@ -31,6 +31,11 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     private var pathMonitor: NWPathMonitor?
     private var observingDefaultPath = false
     private var lastPathKey: String?
+    private var latestMonitorPath: Network.NWPath?
+    private var pendingPathCheck: DispatchWorkItem?
+    private var pathWarmupUntil = Date.distantPast
+    private var lastHealthTick: Date?
+    private var lastSleepAt: Date?
     private var eventSink: TunnelEventSink?
 
     override func startTunnel(options: [String: NSObject]?, completionHandler: @escaping (Error?) -> Void) {
@@ -70,7 +75,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         SharedLog.onClear = { [weak controlServer] in controlServer?.broadcastClear() }
         control.onReconnect = { [weak self] in self?.requestRecovery(reason: "app request") }
         control.onWake = { [weak self] in
-            self?.workQueue.async { self?.recovery.noteWake() }
+            self?.workQueue.async { self?.handleWake() }
         }
         control.start(token: conf["controlToken"] as? String
             ?? conf["beaconToken"] as? String
@@ -193,13 +198,30 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     }
 
     override func sleep(completionHandler: @escaping () -> Void) {
-        workQueue.async { [weak self] in self?.recovery.noteSleep() }
+        workQueue.async { [weak self] in
+            self?.lastSleepAt = Date()
+            self?.recovery.noteSleep()
+        }
         completionHandler()
     }
 
     override func wake() {
         SharedLog.write("[EXT] wake")
-        workQueue.async { [weak self] in self?.recovery.noteWake() }
+        workQueue.async { [weak self] in self?.handleWake() }
+    }
+
+    private func handleWake() {
+        guard started else { return }
+        let now = Date()
+        let lastActive = lastSleepAt ?? lastHealthTick ?? now
+        lastSleepAt = nil
+        recovery.noteWake()
+        // Android only kicks the core after a deep sleep. A short screen lock
+        // should not provoke a 30-second TURN liveness probe while traffic is idle.
+        if now.timeIntervalSince(lastActive) >= 60 {
+            SharedLog.write("[EXT] wake after \(Int(now.timeIntervalSince(lastActive)))s - probing TURN")
+            MobileWake()
+        }
     }
 
     // MARK: - Recovery
@@ -208,7 +230,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         recovery.streamRecovery = { _ in
             // Recycles only the streams that stopped receiving; the session, the tunnel and
             // the other allocations keep running.
-            _ = MobileEnsureStreams()
+            return MobileEnsureStreams()
         }
         recovery.reconnect = { _ in
             // Rebuilds every TURN allocation; the tunnel, fd and WireGuard keys stay.
@@ -306,6 +328,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         t.schedule(deadline: .now() + 1, repeating: 2)
         t.setEventHandler { [weak self] in
             guard let self = self, self.started else { return }
+            self.lastHealthTick = Date()
             self.recovery.tick(self.currentHealth())
             self.memTicks += 1
             if self.memTicks % 5 == 0 {
@@ -321,12 +344,16 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
     // MARK: - Network path
 
-    /// `defaultPath` is the physical path used by the provider's own sockets: the tunnel's
-    /// utun is not part of it, so it is the reliable Wi-Fi <-> cellular handover signal.
-    /// `NWPathMonitor` is kept as a secondary source (and the documented replacement on
-    /// iOS 18+); the controller de-duplicates the two.
+    /// Use the physical transport actually selected by the provider's path. The old
+    /// availableInterfaces key changed when an unused cellular interface or utun appeared,
+    /// tearing down every healthy TURN allocation.
     private func startPathWatch() {
         pathMonitor?.cancel()
+        pendingPathCheck?.cancel()
+        pendingPathCheck = nil
+        lastPathKey = nil
+        latestMonitorPath = nil
+        pathWarmupUntil = Date().addingTimeInterval(3)
         if !observingDefaultPath {
             // `defaultPath` is KVO-compliant and reports the physical path of the
             // provider's own sockets; the tunnel's utun is not part of it.
@@ -337,8 +364,10 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         let monitor = NWPathMonitor()
         monitor.pathUpdateHandler = { [weak self] path in
             guard let self = self else { return }
-            let key = PacketTunnelProvider.pathKey(path)
-            self.workQueue.async { self.handlePath(key) }
+            self.workQueue.async {
+                self.latestMonitorPath = path
+                self.observePhysicalPath()
+            }
         }
         monitor.start(queue: workQueue)
         pathMonitor = monitor
@@ -351,41 +380,52 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                                context: UnsafeMutableRawPointer?) {
         guard context == Self.defaultPathContext,
               let path = change?[.newKey] as? Network.NWPath else { return }
-        let key = Self.pathKey(path)
-        workQueue.async { [weak self] in self?.handlePath(key) }
+        workQueue.async { [weak self] in self?.observePhysicalPath(path) }
     }
 
     private static func pathKey(_ path: Network.NWPath) -> String {
         guard path.status == .satisfied else { return "none" }
-        var names: [String] = []
-        for interface in path.availableInterfaces {
-            switch interface.type {
-            case .wifi, .cellular, .wiredEthernet:
-                names.append(interface.name)
-            default:
-                break
-            }
-        }
-        names.sort()
-        return names.isEmpty ? "other" : names.joined(separator: ",")
+        if path.usesInterfaceType(.wiredEthernet) { return "ethernet" }
+        if path.usesInterfaceType(.wifi) { return "wifi" }
+        if path.usesInterfaceType(.cellular) { return "cellular" }
+        return "other"
     }
 
-    private func handlePath(_ key: String) {
+    private func observePhysicalPath(_ observedPath: Network.NWPath? = nil) {
         guard started else { return }
-        guard let previous = lastPathKey else {
-            lastPathKey = key
-            return
-        }
-        guard previous != key, key != "none" else {
-            lastPathKey = key
-            return
-        }
-        lastPathKey = key
-        // "none" (no network) and "other" (the monitor only sees our own utun) are not
-        // handover signals.
+        // defaultPath belongs to the extension's own sockets. The monitor is a fallback
+        // until that path is available, but never overrides a known provider path.
+        guard let path = defaultPath ?? observedPath ?? latestMonitorPath else { return }
+        let key = Self.pathKey(path)
         guard key != "none", key != "other" else { return }
-        SharedLog.write("[EXT] network path \(previous) -> \(key)")
-        recovery.notePathChange(key)
+        if lastPathKey == nil || Date() < pathWarmupUntil {
+            pendingPathCheck?.cancel()
+            pendingPathCheck = nil
+            lastPathKey = key
+            SharedLog.write("[EXT] physical network baseline: \(key)")
+            return
+        }
+        guard lastPathKey != key else {
+            pendingPathCheck?.cancel()
+            pendingPathCheck = nil
+            return
+        }
+        // Re-sample after the handover settles. Extra path notifications for the same
+        // candidate do not extend the wait indefinitely.
+        if pendingPathCheck != nil { return }
+        let check = DispatchWorkItem { [weak self] in
+            guard let self = self, self.started else { return }
+            self.pendingPathCheck = nil
+            guard let settledPath = self.defaultPath ?? self.latestMonitorPath else { return }
+            let settled = Self.pathKey(settledPath)
+            guard settled != "none", settled != "other",
+                  let previous = self.lastPathKey, previous != settled else { return }
+            self.lastPathKey = settled
+            SharedLog.write("[EXT] physical network \(previous) -> \(settled)")
+            self.recovery.notePathChange(settled)
+        }
+        pendingPathCheck = check
+        workQueue.asyncAfter(deadline: .now() + 2, execute: check)
     }
 
     // MARK: - App messages
@@ -413,11 +453,16 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         healthTimer = nil
         pathMonitor?.cancel()
         pathMonitor = nil
+        pendingPathCheck?.cancel()
+        pendingPathCheck = nil
         if observingDefaultPath {
             removeObserver(self, forKeyPath: "defaultPath", context: Self.defaultPathContext)
             observingDefaultPath = false
         }
         lastPathKey = nil
+        latestMonitorPath = nil
+        lastHealthTick = nil
+        lastSleepAt = nil
         recovery.stop()
         control.stop()
         SharedLog.onWrite = nil
